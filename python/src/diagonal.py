@@ -55,6 +55,7 @@ def diagonal_by_einsum(data, axis1=0, axis2=1):
                 outputs=[param(node.output[0], dtype, out_shape)],
                 )
             )
+    onnx.checker.check_model(model)
     [diag] = run_model(model, node.output, node.input, [data])
     assert data.dtype == diag.dtype
     assert out_shape == diag.shape
