@@ -65,7 +65,11 @@ def diagonal_by_einsum_test():
     print("diagonal_by_einsum_test() start")
 
     for data, axis1, axis2 in [
+            (np.random.rand(2,2), 0, 1),
+            (np.random.rand(2,2), 1, 0),
+            (np.random.rand(2,2), -1, -2),
             (np.random.rand(1,2,2,3), 1, 2),
+            (np.random.rand(2,1,3,2), 0, 3),
             ]:
         expected = np.diagonal(data, axis1=axis1, axis2=axis2)
         actual = diagonal_by_einsum(data, axis1, axis2)
