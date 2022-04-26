@@ -41,19 +41,21 @@ def diagonal_check_arguments(data, offset=0, axis1=0, axis2=1):
 
 
 # einsum helpers
-ASCII_LETTERS = list(string.ascii_uppercase + string.ascii_lowercase)
+ASCII_LETTERS = string.ascii_uppercase + string.ascii_lowercase
 
-# Implements np.diagonal (without offset) with onnx.
+# Implements np.diagonal (without offset) with onnx Einsum.
 def diagonal_by_einsum(data, offset=0, axis1=0, axis2=1):
-    assert offset == 0
+    assert offset == 0, \
+            "this implementation only takes offset 0"
     axis1, axis2, oshape = diagonal_check_arguments(data, axis1=axis1, axis2=axis2)
-    assert data.ndim <= len(ASCII_LETTERS), \
-            "ran out of letters for indices, shape is too long"
-    osubscripts = ASCII_LETTERS[:data.ndim - 1]
-    isubscripts = osubscripts[:-1]
+    assert max(axis1, axis2) <= len(ASCII_LETTERS), \
+            f"this implementation only takes axes <= {len(ASCII_LETTERS)}"
+    diagletter = ASCII_LETTERS[-1]
+    otherletters = ASCII_LETTERS[:max(axis1, axis2) - 1]
+    ilst = list(otherletters)
     for ax in sorted([axis1, axis2]):
-        isubscripts.insert(ax, osubscripts[-1])
-    equation = f"{''.join(isubscripts)}->{''.join(osubscripts)}"
+        ilst.insert(ax, diagletter)
+    equation = f"{''.join(ilst)}...->{otherletters}...{diagletter}"
     node = onnx.helper.make_node(
             "Einsum",
             inputs=["data"],
