@@ -55,6 +55,8 @@ def make_constant_node(name, tensor):
 def run_model(model, *inputs):
     sess = onnxruntime.InferenceSession(model.SerializeToString())
     def names(params): return map(lambda param: param.name, params)
+    # model might omit an input, e.g. when result is just a constant
+    assert len(model.graph.input) <= len(inputs)
     inputs_dict = dict(zip(names(model.graph.input), inputs))
     output_names = list(names(model.graph.output))
     return sess.run(output_names, inputs_dict)
@@ -64,6 +66,7 @@ def infer_shapes_and_run_model(model, *inputs):
     model = onnx.shape_inference.infer_shapes(model)
     onnx.checker.check_model(model)
     return run_model(model, *inputs)
+
 
 # diagonal helpers:
 
@@ -103,7 +106,17 @@ def einsum_diagonal_equation(axis1, axis2):
 # Implements np.diagonal with onnx Slice and Einsum.
 def diagonal_by_slice_einsum(dtype, ishape, offset=0, axis1=0, axis2=1):
     axis1, axis2, oshape = diagonal_check_arguments(ishape, offset, axis1, axis2)
-    # TODO: if oshape is empty, return empty constant
+    if np.prod(oshape) == 0:
+        empty = np.empty(oshape, dtype=dtype)
+        empty_node = make_constant_node("empty", empty)
+        return onnx.helper.make_model(
+                graph=onnx.helper.make_graph(
+                    name='diagonal_empty',
+                    nodes=[empty_node],
+                    inputs=[],
+                    outputs=[param("empty", dtype, oshape)],
+                    )
+                )
     if offset == 0:
         slice_output_name = "data"
         slice_nodes = []
@@ -194,6 +207,8 @@ def diagonal_test():
             ((2,2), -1, -2),
             ((1,2,2,3), 1, 2),
             ((2,1,3,2), 0, 3),
+            ((2,0,3,2), 0, 3),
+            ((0,1,3,0), 0, 3),
             ]:
         data = np.random.rand(*shape)
         dtype = data.dtype
