@@ -237,6 +237,55 @@ def diagonal_by_gather_elements_penultimate_squeeze(data, offset=0, axis1=0, axi
     assert oshape == diagonalized.shape
     return diagonalized
 
+# Implements np.diagonal with onnx GatherElements.
+def diagonal_by_gather_elements_squeeze_transpose(data, offset=0, axis1=0, axis2=1):
+    assert offset == 0, "this implementation only takes offset 0"
+    axis1, axis2, oshape = diagonal_check_arguments(data.shape, offset, axis1, axis2)
+    dim = oshape[-1]
+    assert dim == data.shape[axis1] == data.shape[axis2]
+    axis1, axis2 = sorted([axis1, axis2])
+    indices_shape = data.shape[:axis1] + (1,) + data.shape[axis1 + 1:]
+    arange = np.arange(dim)
+    # same as arange.reshape((dim,) + (1,) * (data.ndim - 1 - axis2))
+    unsqueezed = np.expand_dims(arange, tuple(range(1, data.ndim - axis2)))
+    indices = np.broadcast_to(unsqueezed, indices_shape)
+    indices_node = make_constant_node("indices", indices)
+    gather_elements_node = onnx.helper.make_node(
+            "GatherElements",
+            inputs=["data", "indices"],
+            outputs=["gathered"],
+            axis=axis1)
+    squeeze_axes_node = make_constant_node("squeeze_axes", np.array([axis1]))
+    squeeze_node = onnx.helper.make_node(
+            "Squeeze",
+            inputs=["gathered", "squeeze_axes"],
+            outputs=["squeezed"])
+    nodes = [indices_node, gather_elements_node, squeeze_axes_node, squeeze_node]
+    if axis2 == data.ndim - 1:
+        output_name = "squeezed"
+    else:
+        perm = perm_from_dict(len(oshape), {axis1: -1})
+        transpose_node = onnx.helper.make_node(
+                "Transpose",
+                inputs=["squeezed"],
+                outputs=["transposed"],
+                perm=perm)
+        nodes.append(transpose_node)
+        output_name = "transposed"
+    model = onnx.helper.make_model(
+            graph=onnx.helper.make_graph(
+                name='diagonal_by_gather_elements_penultimate_squeeze',
+                nodes=nodes,
+                inputs=[param("data", data.dtype, data.shape)],
+                outputs=[param(output_name, data.dtype, oshape)],
+                )
+            )
+    onnx.checker.check_model(model)
+    [result] = run_model(model, data)
+    assert data.dtype == result.dtype
+    assert oshape == result.shape
+    return result
+
 def diagonal_test():
     print("diagonal_test() start")
 
@@ -253,6 +302,7 @@ def diagonal_test():
                 diagonal_by_slice_einsum(data, axis1=axis1, axis2=axis2),
                 diagonal_by_gather_elements_last_squeeze(data, axis1=axis1, axis2=axis2),
                 diagonal_by_gather_elements_penultimate_squeeze(data, axis1=axis1, axis2=axis2),
+                diagonal_by_gather_elements_squeeze_transpose(data, axis1=axis1, axis2=axis2),
             ]
         for actual in actuals:
             assert expected.dtype == actual.dtype
