@@ -4,6 +4,24 @@ import onnx
 import onnxruntime
 
 
+# numpy helpers
+def perm_from_dict(ndim, perm_dict):
+    '''perm_dict maps axes to axes, each axes in [-ndim...ndim)'''
+    assert all(-ndim <= k < ndim and -ndim <= v < ndim for k, v in perm_dict.items())
+    def nonneg(a): return ndim + a if a < 0 else a
+    d = {nonneg(k): nonneg(v) for k,v in perm_dict.items()}
+    assert len(perm_dict) == len(d) == len(set(d.values()))
+    perm = list(range(ndim))
+    for a in sorted(d, reverse=True):
+        del perm[a]
+    for k, v in sorted(d.items(), key=lambda kv:kv[1]):
+        perm.insert(v, k)
+    return tuple(perm)
+
+def transpose_by_dict(tensor, perm_dict):
+    return tensor.transpose(perm_from_dict(tensor.ndim, perm_dict))
+
+
 # onnx helpers
 Numpy2OnnxType = {
         np.float32: onnx.TensorProto.FLOAT,
@@ -146,12 +164,7 @@ def diagonal_by_gather_elements_squeeze(data, offset=0, axis1=0, axis2=1):
 
     if {axis1, axis2} != {data.ndim - 2, data.ndim - 1}:
         # TODO: do this transpose in onnx
-        perm = list(range(len(data.shape)))
-        axis1, axis2 = sorted([axis1, axis2])
-        del perm[axis2]
-        del perm[axis1]
-        perm += [axis1, axis2]
-        data = data.transpose(perm)
+        data = transpose_by_dict(data, {axis1: data.ndim - 2, axis2: data.ndim - 1})
         axis1, axis2 = data.ndim - 2, data.ndim - 1
 
     assert {axis1, axis2} == {data.ndim - 2, data.ndim - 1}, \
