@@ -99,53 +99,38 @@ def einsum_diagonal_equation(axis1, axis2):
     return f"{''.join(inlst)}...->{other}...{diag}"
 
 
-# Implements np.diagonal (without offset) with onnx Einsum.
-def diagonal_by_einsum(dtype, ishape, offset=0, axis1=0, axis2=1):
-    assert offset == 0, "this implementation only takes offset 0"
-    axis1, axis2, oshape = diagonal_check_arguments(ishape, offset, axis1, axis2)
-    equation = einsum_diagonal_equation(axis1, axis2)
-    einsum_node = onnx.helper.make_node(
-            "Einsum",
-            inputs=["data"],
-            outputs=["diagonalized"],
-            equation=equation)
-    return onnx.helper.make_model(
-            graph=onnx.helper.make_graph(
-                name='diagonal_by_einsum',
-                nodes=[einsum_node],
-                inputs=[param("data", dtype, ishape)],
-                outputs=[param("diagonalized", dtype, oshape)],
-                )
-            )
-
 # Implements np.diagonal with onnx Slice and Einsum.
 def diagonal_by_slice_einsum(dtype, ishape, offset=0, axis1=0, axis2=1):
-    if offset == 0:
-        return diagonal_by_einsum(dtype, ishape, 0, axis1, axis2)
     axis1, axis2, oshape = diagonal_check_arguments(ishape, offset, axis1, axis2)
     equation = einsum_diagonal_equation(axis1, axis2)
-    axes = [axis1, axis2]
-    dim = ishape[axis1]
-    if offset < 0:
-        starts, ends = ([-offset, 0], [dim, offset])
+    if offset == 0:
+        slice_output_name = "data"
+        slice_nodes = []
     else:
-        starts, ends = [0, offset], [-offset, dim]
-    starts_node = make_constant_node("starts", starts)
-    ends_node = make_constant_node("ends", ends)
-    axes_node = make_constant_node("axes", axes)
-    slice_node = onnx.helper.make_node(
-            "Slice",
-            inputs=["data", "starts", "ends", "axes"],
-            outputs=["sliced"])
+        slice_output_name = "sliced"
+        axes = [axis1, axis2]
+        dim = ishape[axis1]
+        if offset < 0:
+            starts, ends = ([-offset, 0], [dim, offset])
+        else:
+            starts, ends = [0, offset], [-offset, dim]
+        starts_node = make_constant_node("starts", starts)
+        ends_node = make_constant_node("ends", ends)
+        axes_node = make_constant_node("axes", axes)
+        slice_node = onnx.helper.make_node(
+                "Slice",
+                inputs=["data", "starts", "ends", "axes"],
+                outputs=[slice_output_name])
+        slice_nodes = [starts_node, ends_node, axes_node, slice_node]
     einsum_node = onnx.helper.make_node(
             "Einsum",
-            inputs=["sliced"],
+            inputs=[slice_output_name],
             outputs=["diagonalized"],
             equation=equation)
     return onnx.helper.make_model(
             graph=onnx.helper.make_graph(
                 name='diagonal_by_slice_einsum',
-                nodes=[starts_node, ends_node, axes_node, slice_node, einsum_node],
+                nodes=slice_nodes + [einsum_node],
                 inputs=[param("data", dtype, ishape)],
                 outputs=[param("diagonalized", dtype, oshape)],
                 )
@@ -209,7 +194,6 @@ def diagonal_test():
         dtype = data.dtype
         expected = np.diagonal(data, axis1=axis1, axis2=axis2)
         models = [
-                diagonal_by_einsum(dtype, shape, axis1=axis1, axis2=axis2),
                 diagonal_by_slice_einsum(dtype, shape, axis1=axis1, axis2=axis2),
                 diagonal_by_gather_elements_squeeze_transpose(dtype, shape, axis1=axis1, axis2=axis2),
             ]
