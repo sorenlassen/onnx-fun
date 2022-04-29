@@ -102,7 +102,6 @@ def einsum_diagonal_equation(axis1, axis2):
 # Implements np.diagonal with onnx Slice and Einsum.
 def diagonal_by_slice_einsum(dtype, ishape, offset=0, axis1=0, axis2=1):
     axis1, axis2, oshape = diagonal_check_arguments(ishape, offset, axis1, axis2)
-    equation = einsum_diagonal_equation(axis1, axis2)
     # TODO: if oshape is empty, return empty constant
     if offset == 0:
         slice_output_name = "data"
@@ -123,6 +122,7 @@ def diagonal_by_slice_einsum(dtype, ishape, offset=0, axis1=0, axis2=1):
                 inputs=["data", "starts", "ends", "axes"],
                 outputs=[slice_output_name])
         slice_nodes = [starts_node, ends_node, axes_node, slice_node]
+    equation = einsum_diagonal_equation(axis1, axis2)
     einsum_node = onnx.helper.make_node(
             "Einsum",
             inputs=[slice_output_name],
@@ -142,6 +142,7 @@ def diagonal_by_gather_elements_squeeze_transpose(dtype, ishape, offset=0, axis1
     # TODO: if offset is not 0, Slice
     assert offset == 0, "this implementation only takes offset 0"
     axis1, axis2, oshape = diagonal_check_arguments(ishape, offset, axis1, axis2)
+    # TODO: if oshape is empty, return empty constant
     dim = oshape[-1]
     assert dim == ishape[axis1] == ishape[axis2]
     axis1, axis2 = sorted([axis1, axis2])
