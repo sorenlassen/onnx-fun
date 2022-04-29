@@ -12,31 +12,49 @@ Numpy2OnnxType = {
         np.int64: onnx.TensorProto.INT64,
     }
 
+def onnx_type(dtype):
+    return Numpy2OnnxType[dtype.type if isinstance(dtype, np.dtype) else dtype]
+
 def param(param_name, dtype, shape):
-    onnx_dtype = Numpy2OnnxType[dtype.type if isinstance(dtype, np.dtype) else dtype]
     return onnx.helper.make_tensor_value_info(
             param_name,
-            onnx_dtype,
+            onnx_type(dtype),
             shape)
 
-def run_model(model, output_names, input_names, inputs):
+def make_constant_node(name, tensor):
+    return onnx.helper.make_node(
+        "Constant",
+        inputs=[],
+        outputs=[name],
+        value=onnx.helper.make_tensor(
+            name=name,
+            data_type=onnx_type(tensor.dtype),
+            dims=tensor.shape,
+            vals=tensor.flatten(),
+        ),
+    )
+def run_model(model, *inputs):
     sess = onnxruntime.InferenceSession(model.SerializeToString())
-    return sess.run(output_names, dict(zip(input_names, inputs)))
+    def names(params): return map(lambda param: param.name, params)
+    inputs_dict = dict(zip(names(model.graph.input), inputs))
+    output_names = list(names(model.graph.output))
+    return sess.run(output_names, inputs_dict)
 
 
 # diagonal helpers:
 
 # Checks input args. Returns non-negative axes and the output shape.
-def diagonal_check_arguments(data, offset=0, axis1=0, axis2=1):
-    assert data.ndim >= 2
-    assert all(-data.ndim <= x < data.ndim for x in [axis1, axis2])
-    if axis1 < 0: axis1 += data.ndim
-    if axis2 < 0: axis2 += data.ndim
+def diagonal_check_arguments(data_shape, offset=0, axis1=0, axis2=1):
+    ndim = len(data_shape)
+    assert ndim >= 2
+    assert all(-ndim <= x < ndim for x in [axis1, axis2])
+    if axis1 < 0: axis1 += ndim
+    if axis2 < 0: axis2 += ndim
     assert axis1 != axis2, f"{axis1},{axis2}"
-    dim = data.shape[axis1]
-    assert dim == data.shape[axis2]
+    dim = data_shape[axis1]
+    assert dim == data_shape[axis2]
     offset_dim = dim - abs(offset) if -dim < offset < dim else 0
-    oshape = list(data.shape) + [offset_dim]
+    oshape = list(data_shape) + [offset_dim]
     for ax in reversed(sorted([axis1, axis2])):
         del oshape[ax]
     return axis1, axis2, tuple(oshape)
@@ -56,11 +74,11 @@ def einsum_diagonal_equation(axis1, axis2):
         inlst.insert(ax, diag)
     return f"{''.join(inlst)}...->{other}...{diag}"
 
+
 # Implements np.diagonal (without offset) with onnx Einsum.
 def diagonal_by_einsum(data, offset=0, axis1=0, axis2=1):
-    assert offset == 0, \
-            "this implementation only takes offset 0"
-    axis1, axis2, oshape = diagonal_check_arguments(data, axis1=axis1, axis2=axis2)
+    assert offset == 0, "this implementation only takes offset 0"
+    axis1, axis2, oshape = diagonal_check_arguments(data.shape, axis1=axis1, axis2=axis2)
     equation = einsum_diagonal_equation(axis1, axis2)
     einsum_node = onnx.helper.make_node(
             "Einsum",
@@ -76,7 +94,7 @@ def diagonal_by_einsum(data, offset=0, axis1=0, axis2=1):
                 )
             )
     onnx.checker.check_model(model)
-    [diagonalized] = run_model(model, ["diagonalized"], ["data"], [data])
+    [diagonalized] = run_model(model, data)
     assert data.dtype == diagonalized.dtype
     assert oshape == diagonalized.shape
     return diagonalized
@@ -85,7 +103,7 @@ def diagonal_by_einsum(data, offset=0, axis1=0, axis2=1):
 def diagonal_by_slice_einsum(data, offset=0, axis1=0, axis2=1):
     if offset == 0:
         return diagonal_by_einsum(data, 0, axis1, axis2)
-    axis1, axis2, oshape = diagonal_check_arguments(data, offset, axis1, axis2)
+    axis1, axis2, oshape = diagonal_check_arguments(data.shape, offset, axis1, axis2)
     equation = einsum_diagonal_equation(axis1, axis2)
     axes = [axis1, axis2]
     dim = data.shape[axis1]
@@ -93,6 +111,9 @@ def diagonal_by_slice_einsum(data, offset=0, axis1=0, axis2=1):
         starts, ends = ([-offset, 0], [dim, offset])
     else:
         starts, ends = [0, offset], [-offset, dim]
+    starts_node = make_constant_node("starts", starts)
+    ends_node = make_constant_node("ends", ends)
+    axes_node = make_constant_node("axes", axes)
     slice_node = onnx.helper.make_node(
             "Slice",
             inputs=["data", "starts", "ends", "axes"],
@@ -105,21 +126,15 @@ def diagonal_by_slice_einsum(data, offset=0, axis1=0, axis2=1):
     model = onnx.helper.make_model(
             graph=onnx.helper.make_graph(
                 name='diagonal_by_slice_einsum',
-                nodes=[slice_node, einsum_node],
-                inputs=[
-                    param("data", data.dtype, data.shape),
-                    param("starts", np.int64, (2,)),
-                    param("ends", np.int64, (2,)),
-                    param("axes", np.int64, (2,)),
-                    ],
+                nodes=[starts_node, ends_node, axes_node, slice_node, einsum_node],
+                inputs=[param("data", data.dtype, data.shape)],
                 outputs=[param("diagonalized", data.dtype, oshape)],
                 )
             )
     onnx.checker.check_model(model)
     model = onnx.shape_inference.infer_shapes(model)
     onnx.checker.check_model(model)
-    [diagonalized] = run_model(model, ["diagonalized"],
-            ["data", "starts", "ends", "axes"], [data, starts, ends, axes])
+    [diagonalized] = run_model(model, data)
     assert data.dtype == diagonalized.dtype
     assert oshape == diagonalized.shape
     return diagonalized
