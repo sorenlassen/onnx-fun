@@ -211,7 +211,7 @@ def diagonal_by_gather_elements_penultimate_squeeze(data, offset=0, axis1=0, axi
             "this implementation only works on the last axes"
     dim = oshape[-1]
     assert dim == data.shape[axis1] == data.shape[axis2]
-    indices = np.broadcast_to(np.arange(dim).reshape(1, dim), oshape[:-1] + (1, dim))
+    indices = np.broadcast_to(np.arange(dim), oshape[:-1] + (1, dim))
     indices_node = make_constant_node("indices", indices)
     gather_elements_node = onnx.helper.make_node(
             "GatherElements",
