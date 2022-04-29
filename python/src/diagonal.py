@@ -103,6 +103,7 @@ def einsum_diagonal_equation(axis1, axis2):
 def diagonal_by_slice_einsum(dtype, ishape, offset=0, axis1=0, axis2=1):
     axis1, axis2, oshape = diagonal_check_arguments(ishape, offset, axis1, axis2)
     equation = einsum_diagonal_equation(axis1, axis2)
+    # TODO: if oshape is empty, return empty constant
     if offset == 0:
         slice_output_name = "data"
         slice_nodes = []
@@ -138,6 +139,7 @@ def diagonal_by_slice_einsum(dtype, ishape, offset=0, axis1=0, axis2=1):
 
 # Implements np.diagonal with onnx GatherElements.
 def diagonal_by_gather_elements_squeeze_transpose(dtype, ishape, offset=0, axis1=0, axis2=1):
+    # TODO: if offset is not 0, Slice
     assert offset == 0, "this implementation only takes offset 0"
     axis1, axis2, oshape = diagonal_check_arguments(ishape, offset, axis1, axis2)
     dim = oshape[-1]
@@ -149,6 +151,7 @@ def diagonal_by_gather_elements_squeeze_transpose(dtype, ishape, offset=0, axis1
     unsqueezed = np.expand_dims(arange, tuple(range(1, len(ishape) - axis2)))
     indices = np.broadcast_to(unsqueezed, indices_shape)
     indices_node = make_constant_node("indices", indices)
+    # TODO: if dim is 1, Reshape instead of GatherElements+Squeeze
     gather_elements_node = onnx.helper.make_node(
             "GatherElements",
             inputs=["data", "indices"],
