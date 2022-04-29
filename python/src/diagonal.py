@@ -44,7 +44,7 @@ def run_model(model, *inputs):
 # diagonal helpers:
 
 # Checks input args. Returns non-negative axes and the output shape.
-def diagonal_check_arguments(data_shape, offset=0, axis1=0, axis2=1):
+def diagonal_check_arguments(data_shape, offset, axis1, axis2):
     ndim = len(data_shape)
     assert ndim >= 2
     assert all(-ndim <= x < ndim for x in [axis1, axis2])
@@ -78,7 +78,7 @@ def einsum_diagonal_equation(axis1, axis2):
 # Implements np.diagonal (without offset) with onnx Einsum.
 def diagonal_by_einsum(data, offset=0, axis1=0, axis2=1):
     assert offset == 0, "this implementation only takes offset 0"
-    axis1, axis2, oshape = diagonal_check_arguments(data.shape, axis1=axis1, axis2=axis2)
+    axis1, axis2, oshape = diagonal_check_arguments(data.shape, offset, axis1, axis2)
     equation = einsum_diagonal_equation(axis1, axis2)
     einsum_node = onnx.helper.make_node(
             "Einsum",
@@ -142,7 +142,7 @@ def diagonal_by_slice_einsum(data, offset=0, axis1=0, axis2=1):
 # Implements np.diagonal with onnx GatherElements.
 def diagonal_by_gather_elements_squeeze(data, offset=0, axis1=0, axis2=1):
     assert offset == 0, "this implementation only takes offset 0"
-    axis1, axis2, oshape = diagonal_check_arguments(data.shape, axis1=axis1, axis2=axis2)
+    axis1, axis2, oshape = diagonal_check_arguments(data.shape, offset, axis1, axis2)
 
     if {axis1, axis2} != {data.ndim - 2, data.ndim - 1}:
         # TODO: do this transpose in onnx
