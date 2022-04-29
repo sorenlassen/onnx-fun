@@ -77,10 +77,11 @@ def diagonal_check_arguments(data_shape, offset, axis1, axis2):
     assert axis1 != axis2, f"{axis1},{axis2}"
     dim = data_shape[axis1]
     assert dim == data_shape[axis2]
-    offset_dim = dim - abs(offset) if -dim < offset < dim else 0
-    oshape = list(data_shape) + [offset_dim]
-    for ax in reversed(sorted([axis1, axis2])):
+    oshape = list(data_shape)
+    for ax in sorted([axis1, axis2], reverse=True):
         del oshape[ax]
+    offset_dim = dim - abs(offset) if -dim < offset < dim else 0
+    oshape.append(offset_dim)
     return axis1, axis2, tuple(oshape)
 
 
