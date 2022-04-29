@@ -5,6 +5,12 @@ import onnxruntime
 
 
 # numpy helpers
+def mutate_shape(shape, mutation_dict):
+    lst = list(shape)
+    for axis, dim in mutation_dict.items():
+        lst[axis] = dim
+    return tuple(lst)
+
 def perm_from_dict(ndim, perm_dict):
     '''perm_dict maps axes to axes, each axes in [-ndim...ndim)'''
     assert all(-ndim <= k < ndim and -ndim <= v < ndim for k, v in perm_dict.items())
@@ -40,6 +46,7 @@ def param(param_name, dtype, shape):
             shape)
 
 def make_constant_node(output_name, tensor):
+    tensor = np.asarray(tensor)
     return onnx.helper.make_node(
         "Constant",
         inputs=[],
@@ -99,6 +106,45 @@ def diagonal_check_arguments(data_shape, offset, axis1, axis2):
     oshape.append(offset_dim)
     return axis1, axis2, tuple(oshape)
 
+def diagonal_slice(dtype, ishape, offset, axis1, axis2):
+    axis1, axis2, oshape = diagonal_check_arguments(ishape, offset, axis1, axis2)
+    input_name = "diagonal_slice_input"
+    output_name = "diagonal_slice_output"
+    if offset == 0:
+        sliced_shape = ishape
+        slice_nodes = [
+                onnx.helper.make_node(
+                    "Identity",
+                    inputs=[input_name],
+                    outputs=[output_name]),
+                ]
+    else:
+        sliced_dim = oshape[-1]
+        sliced_shape = mutate_shape(ishape, {axis1: sliced_dim, axis2: sliced_dim})
+        axes = [axis1, axis2]
+        dim = ishape[axis1]
+        if offset < 0:
+            starts, ends = ([-offset, 0], [dim, offset])
+        else:
+            starts, ends = [0, offset], [-offset, dim]
+        slice_nodes = [
+            make_constant_node("starts", starts),
+            make_constant_node("ends", ends),
+            make_constant_node("axes", axes),
+            onnx.helper.make_node(
+                    "Slice",
+                    inputs=[input_name, "starts", "ends", "axes"],
+                    outputs=[output_name]),
+            ]
+    return onnx.helper.make_model(
+            graph=onnx.helper.make_graph(
+                name='diagonal_slice',
+                nodes=slice_nodes,
+                inputs=[param(input_name, dtype, ishape)],
+                outputs=[param(output_name, dtype, sliced_shape)],
+                )
+            )
+
 
 # einsum helpers
 ASCII_LETTERS = string.ascii_uppercase + string.ascii_lowercase
@@ -120,6 +166,8 @@ def diagonal_by_slice_einsum(dtype, ishape, offset=0, axis1=0, axis2=1):
     axis1, axis2, oshape = diagonal_check_arguments(ishape, offset, axis1, axis2)
     if np.prod(oshape) == 0:
         return make_empty_model("diagonal_empty", "empty", dtype, oshape)
+    # TODO: reuse diagonal_slice, same way it's used in
+    # diagonal_by_gather_elements_squeeze_transpose
     if offset == 0:
         slice_output_name = "data"
         slice_nodes = []
@@ -155,21 +203,21 @@ def diagonal_by_slice_einsum(dtype, ishape, offset=0, axis1=0, axis2=1):
             )
 
 # Implements np.diagonal with onnx GatherElements.
-def diagonal_by_gather_elements_squeeze_transpose(dtype, ishape, offset=0, axis1=0, axis2=1):
-    # TODO: if offset is not 0, Slice
-    assert offset == 0, "this implementation only takes offset 0"
+def diagonal_by_gather_elements(dtype, ishape, offset=0, axis1=0, axis2=1):
     axis1, axis2, oshape = diagonal_check_arguments(ishape, offset, axis1, axis2)
-    # TODO: if oshape is empty, return empty constant
-    dim = oshape[-1]
-    assert dim == ishape[axis1] == ishape[axis2]
+    if np.prod(oshape) == 0: # optimization
+        return make_empty_model("diagonal_empty", "empty", dtype, oshape)
+    slice_model = diagonal_slice(dtype, ishape, offset, axis1, axis2)
+    odim = oshape[-1]
+    sliced_shape = mutate_shape(ishape, {axis1: odim, axis2: odim})
     axis1, axis2 = sorted([axis1, axis2])
-    indices_shape = ishape[:axis1] + (1,) + ishape[axis1 + 1:]
-    arange = np.arange(dim)
-    # same as arange.reshape((dim,) + (1,) * (len(ishape) - 1 - axis2))
-    unsqueezed = np.expand_dims(arange, tuple(range(1, len(ishape) - axis2)))
+    indices_shape = sliced_shape[:axis1] + (1,) + sliced_shape[axis1 + 1:]
+    arange = np.arange(odim)
+    # same as arange.reshape((odim,) + (1,) * (len(sliced_shape) - 1 - axis2))
+    unsqueezed = np.expand_dims(arange, tuple(range(1, len(sliced_shape) - axis2)))
     indices = np.broadcast_to(unsqueezed, indices_shape)
     indices_node = make_constant_node("indices", indices)
-    # TODO: if dim is 1, Reshape instead of GatherElements+Squeeze
+    # TODO: to optimize, if odim is 1, Reshape instead of GatherElements+Squeeze
     gather_elements_node = onnx.helper.make_node(
             "GatherElements",
             inputs=["data", "indices"],
@@ -181,7 +229,7 @@ def diagonal_by_gather_elements_squeeze_transpose(dtype, ishape, offset=0, axis1
             inputs=["gathered", "squeeze_axes"],
             outputs=["squeezed"])
     nodes = [indices_node, gather_elements_node, squeeze_axes_node, squeeze_node]
-    if axis2 == len(ishape) - 1:
+    if axis2 == len(sliced_shape) - 1:
         output_name = "squeezed"
     else:
         perm = perm_from_dict(len(oshape), {axis1: -1})
@@ -192,13 +240,19 @@ def diagonal_by_gather_elements_squeeze_transpose(dtype, ishape, offset=0, axis1
                 perm=perm)
         nodes.append(transpose_node)
         output_name = "transposed"
-    return onnx.helper.make_model(
+    diag_model = onnx.helper.make_model(
             graph=onnx.helper.make_graph(
-                name='diagonal_by_gather_elements_penultimate_squeeze',
+                name='diagonal_by_gather_elements',
                 nodes=nodes,
-                inputs=[param("data", dtype, ishape)],
+                inputs=[param("data", dtype, sliced_shape)],
                 outputs=[param(output_name, dtype, oshape)],
                 )
+            )
+    [slice_output] = slice_model.graph.output
+    [diag_input] = diag_model.graph.input
+    return onnx.compose.merge_models(
+            slice_model, diag_model,
+            io_map=[(slice_output.name, diag_input.name)]
             )
 
 def diagonal_test():
@@ -213,18 +267,19 @@ def diagonal_test():
             ((2,0,3,2), 0, 3),
             ((0,1,3,0), 0, 3),
             ]:
-        data = np.random.rand(*shape)
-        dtype = data.dtype
-        expected = np.diagonal(data, axis1=axis1, axis2=axis2)
-        models = [
-                diagonal_by_slice_einsum(dtype, shape, axis1=axis1, axis2=axis2),
-                diagonal_by_gather_elements_squeeze_transpose(dtype, shape, axis1=axis1, axis2=axis2),
-            ]
-        for model in models:
-            [actual] = infer_shapes_and_run_model(model, data)
-            assert expected.dtype == actual.dtype
-            assert expected.shape == actual.shape
-            assert np.allclose(expected, actual)
+        for offset in (0, 1, 2):
+            data = np.random.rand(*shape)
+            dtype = data.dtype
+            expected = np.diagonal(data, offset, axis1, axis2)
+            models = [
+                    diagonal_by_slice_einsum(dtype, shape, offset, axis1, axis2),
+                    diagonal_by_gather_elements(dtype, shape, offset, axis1, axis2),
+                ]
+            for model in models:
+                [actual] = infer_shapes_and_run_model(model, data)
+                assert expected.dtype == actual.dtype
+                assert expected.shape == actual.shape
+                assert np.allclose(expected, actual)
 
     print("diagonal_test() end")
 
