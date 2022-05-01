@@ -124,13 +124,22 @@ def einsum_decomposed_model(equation, ishapes, dtype):
     oshape = spec.output.shape
     input_names = [f"x{i}" for i in range(len(ishapes))]
     output_name = "result"
+
+    # In two cases the output is just zeros or empty:
+    # (1) empty if there are any 0 dims in the output shape,
+    # (2) zeros if there are any 0 dims in any input shape
+    # (because they either occur in the output, which would be
+    # empty, or will be eliminated by ReduceSum and become zeros).
     if any(np.prod(shape) == 0 for shape in ishapes + [oshape]):
         tensor = np.zeros(oshape, dtype=dtype)
         return make_constant_model('einsum_constant', output_name, tensor)
+
     if spec.is_identity():
+        # The equation is the identity transformation on a single input.
         return make_identity_model(
                 'einsum_identity', input_names[0], output_name,
                 dtype, oshape)
+
     # TODO cover all the other cases...
 
 def einsum_decomposed_model_test():
