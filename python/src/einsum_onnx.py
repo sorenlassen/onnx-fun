@@ -80,16 +80,6 @@ def infer_shapes_and_run_model(model, *inputs):
     return run_model(model, *inputs)
 
 
-# EinsumSpec helpers
-def einsum_is_identity_spec(spec):
-    if len(spec.inputs) != 1:
-        return False
-    if spec.inputs[0].idxs != spec.output.idxs:
-        return False
-    assert spec.inputs[0].shape == spec.output.shape
-    return True
-
-
 def einsum_direct_model(equation, ishapes, dtype):
     spec = einsum.einsum_spec(equation, ishapes)
     oshape = spec.output.shape
@@ -137,7 +127,7 @@ def einsum_decomposed_model(equation, ishapes, dtype):
     if any(np.prod(shape) == 0 for shape in ishapes + [oshape]):
         tensor = np.zeros(oshape, dtype=dtype)
         return make_constant_model('einsum_constant', output_name, tensor)
-    if einsum_is_identity_spec(spec):
+    if spec.is_identity():
         return make_identity_model(
                 'einsum_identity', input_names[0], output_name,
                 dtype, oshape)
