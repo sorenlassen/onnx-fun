@@ -37,6 +37,7 @@ def make_constant_node(output_name, tensor):
         ),
     )
 
+
 def make_constant_model(graph_name, output_name, tensor):
     constant_node = make_constant_node(output_name, tensor)
     return onnx.helper.make_model(
@@ -45,6 +46,21 @@ def make_constant_model(graph_name, output_name, tensor):
                 nodes=[constant_node],
                 inputs=[],
                 outputs=[param(output_name, tensor.dtype, tensor.shape)],
+                )
+            )
+
+def make_identity_model(graph_name, input_name, output_name, dtype, shape):
+    identity_node = onnx.helper.make_node(
+        "Identity",
+        inputs=[input_name],
+        outputs=[output_name],
+    )
+    return onnx.helper.make_model(
+            graph=onnx.helper.make_graph(
+                name=graph_name,
+                nodes=[identity_node],
+                inputs=[param(input_name, dtype, shape)],
+                outputs=[param(output_name, dtype, shape)],
                 )
             )
 
@@ -62,6 +78,16 @@ def infer_shapes_and_run_model(model, *inputs):
     model = onnx.shape_inference.infer_shapes(model)
     onnx.checker.check_model(model)
     return run_model(model, *inputs)
+
+
+# EinsumSpec helpers
+def einsum_is_identity_spec(spec):
+    if len(spec.inputs) != 1:
+        return False
+    if spec.inputs[0].idxs != spec.output.idxs:
+        return False
+    assert spec.inputs[0].shape == spec.output.shape
+    return True
 
 
 def einsum_direct_model(equation, ishapes, dtype):
@@ -111,6 +137,10 @@ def einsum_decomposed_model(equation, ishapes, dtype):
     if any(np.prod(shape) == 0 for shape in ishapes + [oshape]):
         tensor = np.zeros(oshape, dtype=dtype)
         return make_constant_model('einsum_constant', output_name, tensor)
+    if einsum_is_identity_spec(spec):
+        return make_identity_model(
+                'einsum_identity', input_names[0], output_name,
+                dtype, oshape)
     # TODO cover all the other cases...
 
 def einsum_decomposed_model_test():
@@ -121,6 +151,9 @@ def einsum_decomposed_model_test():
             ("ii", [(0,0)]),
             ("ij,jk", [(0,2),(2,2)]),
             ("ij,jk->k", [(0,2),(2,2)]),
+            ("i", [(2,)]),
+            ("...", [(2,3,4)]),
+            ("ij...k->...ijk", [(2,3,4)]),
             ]:
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
