@@ -38,10 +38,9 @@ def infer_shapes_and_run_model(model, *inputs):
     return run_model(model, *inputs)
 
 
-def einsum_model(equation, ishapes, oshape):
+def einsum_model(equation, ishapes, oshape, dtype):
     input_names = [f"x{i}" for i in range(len(ishapes))]
     output_name = "result"
-    dtype = np.float64
     einsum_node = onnx.helper.make_node(
             "Einsum",
             inputs=input_names,
@@ -68,7 +67,7 @@ def einsum_model_test():
             ]:
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
-        model = einsum_model(equation, ishapes, oshape)
+        model = einsum_model(equation, ishapes, oshape, np.float64)
         [actual] = infer_shapes_and_run_model(model, *inputs)
         assert expected.shape == actual.shape
         np.testing.assert_almost_equal(expected, actual)
