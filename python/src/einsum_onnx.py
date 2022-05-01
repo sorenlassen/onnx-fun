@@ -2,6 +2,7 @@ import string
 import numpy as np
 import onnx
 import onnxruntime
+import einsum
 
 
 # onnx helpers
@@ -22,6 +23,31 @@ def param(param_name, dtype, shape):
             onnx_type(dtype),
             shape)
 
+def make_constant_node(output_name, tensor):
+    tensor = np.asarray(tensor)
+    return onnx.helper.make_node(
+        "Constant",
+        inputs=[],
+        outputs=[output_name],
+        value=onnx.helper.make_tensor(
+            name=output_name,
+            data_type=onnx_type(tensor.dtype),
+            dims=tensor.shape,
+            vals=tensor.flatten(),
+        ),
+    )
+
+def make_constant_model(graph_name, output_name, tensor):
+    constant_node = make_constant_node(output_name, tensor)
+    return onnx.helper.make_model(
+            graph=onnx.helper.make_graph(
+                name=graph_name,
+                nodes=[constant_node],
+                inputs=[],
+                outputs=[param(output_name, tensor.dtype, tensor.shape)],
+                )
+            )
+
 def run_model(model, *inputs):
     sess = onnxruntime.InferenceSession(model.SerializeToString())
     def names(params): return map(lambda param: param.name, params)
@@ -38,7 +64,9 @@ def infer_shapes_and_run_model(model, *inputs):
     return run_model(model, *inputs)
 
 
-def einsum_model(equation, ishapes, oshape, dtype):
+def einsum_direct_model(equation, ishapes, dtype):
+    spec = einsum.einsum_spec(equation, ishapes)
+    oshape = spec.output.shape
     input_names = [f"x{i}" for i in range(len(ishapes))]
     output_name = "result"
     einsum_node = onnx.helper.make_node(
@@ -58,21 +86,51 @@ def einsum_model(equation, ishapes, oshape, dtype):
                 )
             )
 
-def einsum_model_test():
-    print("einsum_model_test() start")
+def einsum_direct_model_test():
+    print("einsum_direct_model_test() start")
 
-    for equation, ishapes, oshape in [
-            ("ii->i", [(2,2)], (2,)),
-            ("ij,jk", [(2,2),(2,2)], (2,2)),
+    for equation, ishapes in [
+            ("ii->i", [(2,2)]),
+            ("ij,jk", [(2,2),(2,2)]),
             ]:
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
-        model = einsum_model(equation, ishapes, oshape, np.float64)
+        model = einsum_direct_model(equation, ishapes, np.float64)
         [actual] = infer_shapes_and_run_model(model, *inputs)
         assert expected.shape == actual.shape
         np.testing.assert_almost_equal(expected, actual)
 
-    print("einsum_model_test() end")
+    print("einsum_direct_model_test() end")
+
+
+def einsum_decomposed_model(equation, ishapes, dtype):
+    spec = einsum.einsum_spec(equation, ishapes)
+    oshape = spec.output.shape
+    input_names = [f"x{i}" for i in range(len(ishapes))]
+    output_name = "result"
+    if any(np.prod(shape) == 0 for shape in ishapes + [oshape]):
+        tensor = np.zeros(oshape, dtype=dtype)
+        return make_constant_model('einsum_constant', output_name, tensor)
+    # TODO cover all the other cases...
+
+def einsum_decomposed_model_test():
+    print("einsum_decomposed_model_test() start")
+
+    for equation, ishapes in [
+            ("ii->i", [(0,0)]),
+            ("ii", [(0,0)]),
+            ("ij,jk", [(0,2),(2,2)]),
+            ("ij,jk->k", [(0,2),(2,2)]),
+            ]:
+        inputs = [ np.random.rand(*shape) for shape in ishapes ]
+        expected = np.einsum(equation, *inputs)
+        model = einsum_decomposed_model(equation, ishapes, np.float64)
+        [actual] = infer_shapes_and_run_model(model, *inputs)
+        assert expected.shape == actual.shape
+        np.testing.assert_almost_equal(expected, actual)
+
+    print("einsum_decomposed_model_test() end")
 
 if __name__ == "__main__":
-   einsum_model_test()
+   einsum_direct_model_test()
+   einsum_decomposed_model_test()
