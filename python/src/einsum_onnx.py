@@ -37,7 +37,6 @@ def make_constant_node(output_name, tensor):
         ),
     )
 
-
 def make_constant_model(graph_name, output_name, tensor):
     constant_node = make_constant_node(output_name, tensor)
     return onnx.helper.make_model(
@@ -50,18 +49,6 @@ def make_constant_model(graph_name, output_name, tensor):
             )
 
 def make_identity_model(graph_name, input_name, output_name, dtype, shape):
-    #
-    # alternatively, return an empty graph with no nodes:
-    #
-    # return onnx.helper.make_model(
-    #        graph=onnx.helper.make_graph(
-    #            name=graph_name,
-    #            nodes=[],
-    #            inputs=[param(input_name, dtype, shape)],
-    #            outputs=[param(input_name, dtype, shape)],
-    #            )
-    #        )
-    #
     identity_node = onnx.helper.make_node(
         "Identity",
         inputs=[input_name],
