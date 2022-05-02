@@ -165,8 +165,52 @@ def einsum_diagonalize_input(spec, transforms, i, dtype):
     return spec, transforms
 
 def einsum_reducesum_input(spec, transforms, i, dtype):
-    # TODO: implement
+    ispec = spec.inputs[i]
+    idxs = list(ispec.idxs)
+    shape = list(ispec.shape)
+    assert len(idxs) == len(set(idxs)), \
+            "duplicates indexes after diagonalization pass"
+    idxs_in_other_inputs = [
+            idx in spec.inputs[j].idxs
+            for j in range(len(spec.inputs)) if j != i
+            ]
+    idxs_only_in_i = set(idxs) - set(idxs_in_other_inputs + spec.output.idxs)
+
+    # Squeeze any idxs only in inputs[i] that have dim 1.
+    one_axes = []
+    one_idxs = []
+    for idx in idxs_only_in_i:
+        axis = idxs.index(idx)
+        if shape[axis] == 1:
+            one_axes.append(axis)
+            one_idxs.append(idx)
+    transforms[i], shape = squeeze_output(transforms[i], one_axes, shape, dtype)
+
+    # ReduceSum the rest.
+    for idx in idxs_only_in_i - set(one_idxs):
+        axis = idxs.index(idx)
+        assert shape[axis] > 1
+        transforms[i], shape = reducesum_output(transforms[i], axis, shape, dtype)
+        del idxs[axis]
+
+    ispec.idxs = idxs
+    ispec.shape = tuple(shape)
     return spec, transforms
+
+def squeeze_output(transform, axes, shape, dtype):
+    if len(axes) == 0:
+        return transform, shape
+    # TODO: implement
+    oshape = list(shape)
+    for a in sorted(axes, reverse=True):
+        del oshape[a]
+    return transform, oshape
+
+def reducesum_output(transform, axis, shape, dtype):
+    # TODO: implement
+    oshape = list(shape)
+    del oshape[axis]
+    return transform, oshape
 
 def einsum_contract_inputs(spec, transforms, i, j, dtype):
     # TODO: implement
