@@ -14,6 +14,18 @@ def einsum_is_identity_spec(spec):
     assert spec.inputs[0].shape == spec.output.shape
     return True
 
+def nonneg(axes, ndim):
+    if isinstance(axes, int):
+        assert -ndim <= axes < ndim
+        return axes if axes >= 0 else axes + ndim
+    return list(map(lambda a: nonneg(a, ndim), axes))
+
+def squeeze_shape(ishape, axes):
+    oshape = list(ishape)
+    for a in sorted(nonneg(axes, len(ishape)), reverse=True):
+        del oshape[a]
+    return tuple(oshape)
+
 
 # onnx helpers
 def onnx_type(dtype):
@@ -72,18 +84,6 @@ def make_identity_model(graph_name, input_name, output_name, dtype, shape):
                 outputs=[param(output_name, dtype, shape)],
                 )
             )
-
-def nonneg(axes, ndim):
-    if isinstance(axes, int):
-        assert -ndim <= axes < ndim
-        return axes if axes >= 0 else axes + ndim
-    return list(map(lambda a: nonneg(a, ndim), axes))
-
-def squeeze_shape(ishape, axes):
-    oshape = list(ishape)
-    for a in sorted(nonneg(axes, len(ishape)), reverse=True):
-        del oshape[a]
-    return tuple(oshape)
 
 def make_squeeze_model(graph_name, input_name, output_name, dtype, shape, axes):
     axes_node = make_constant_node(graph_name, np.array(axes, dtype=np.int64))
