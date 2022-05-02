@@ -63,6 +63,36 @@ def make_identity_model(graph_name, input_name, output_name, dtype, shape):
                 )
             )
 
+def nonneg(axes, ndim):
+    if isinstance(axes, int):
+        assert -ndim <= axes < ndim
+        return axes if axes >= 0 else axes + ndim
+    return list(map(lambda a: nonneg(a, ndim), axes))
+
+def squeeze_shape(ishape, axes):
+    oshape = list(ishape)
+    for a in sorted(nonneg(axes, len(ishape)), reverse=True):
+        del oshape[a]
+    return tuple(oshape)
+
+def make_squeeze_model(graph_name, input_name, output_name, dtype, shape, axes):
+    axes_node = make_constant_node(graph_name, np.array(axes, dtype=np.int64))
+    squeeze_node = onnx.helper.make_node(
+        "Squeeze",
+        inputs=[input_name, graph_name],
+        outputs=[output_name],
+    )
+    oshape = squeeze_shape(shape, axes)
+    model = onnx.helper.make_model(
+            graph=onnx.helper.make_graph(
+                name=graph_name,
+                nodes=[axes_node, squeeze_node],
+                inputs=[param(input_name, dtype, shape)],
+                outputs=[param(output_name, dtype, oshape)],
+                )
+            )
+    return model, oshape
+
 def run_model(model, *inputs):
     sess = onnxruntime.InferenceSession(model.SerializeToString())
     def names(params): return map(lambda param: param.name, params)
@@ -184,13 +214,32 @@ def einsum_reducesum_input(spec, transforms, i, dtype):
     ispec.shape = tuple(shape)
     return spec, transforms
 
+def transform_input_name(transform):
+    if isinstance(transform, str):
+        return transform
+    else:
+        return transform.graph.input[0].name
+
+def transform_output_name(transform):
+    if isinstance(transform, str):
+        return transform
+    else:
+        return transform.graph.output[0].name
+
 def squeeze_output(transform, axes, shape, dtype):
     if len(axes) == 0:
         return transform, shape
-    # TODO: implement
-    oshape = list(shape)
-    for a in sorted(axes, reverse=True):
-        del oshape[a]
+    graph_name = "squeeze" # TODO: make this unique
+    iname = transform_input_name(transform)
+    squeeze_model, oshape = make_squeeze_model(
+            graph_name, iname, "out", dtype, shape, axes)
+    if isinstance(transform, str):
+        transform = squeeze_model
+    else:
+        oname = transform_output_name(transform)
+        transform = onnx.compose.merge_models(
+                transform, squeeze_model,
+                io_map=[(oname, iname)])
     return transform, oshape
 
 def reducesum_output(transform, axis, shape, dtype):
@@ -226,6 +275,11 @@ def einsum_decomposed_model_test():
             ("i", [(2,)]),
             ("...", [(2,3,4)]),
             ("ij...k->...ijk", [(2,3,4)]),
+            # squeezes axes s,t,u:
+            ("sij->ij", [(1,2,3)]),
+            ("isj->ij", [(2,1,3)]),
+            ("ijs->ij", [(2,3,1)]),
+            ("sitju->ij", [(1,2,1,3,1)]),
             ]:
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
