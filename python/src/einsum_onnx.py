@@ -5,6 +5,16 @@ import onnxruntime
 import einsum
 
 
+# EinsumSpec helpers
+def einsum_is_identity_spec(spec):
+    if len(spec.inputs) != 1:
+        return False
+    if spec.inputs[0].idxs != spec.output.idxs:
+        return False
+    assert spec.inputs[0].shape == spec.output.shape
+    return True
+
+
 # onnx helpers
 def onnx_type(dtype):
     '''Returns equivalent onnx.TensorProto basetype for a given numpy type
@@ -253,7 +263,7 @@ def einsum_contract_inputs(spec, transforms, i, j, dtype):
     return spec, transforms
 
 def einsum_finalize(spec, transform, dtype):
-    if spec.is_identity():
+    if einsum_is_identity_spec(spec):
         # The equation is the identity transformation.
         if isinstance(transform, str):
             return make_identity_model(
