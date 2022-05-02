@@ -50,6 +50,18 @@ def make_constant_model(graph_name, output_name, tensor):
             )
 
 def make_identity_model(graph_name, input_name, output_name, dtype, shape):
+    #
+    # alternatively, return an empty graph with no nodes:
+    #
+    # return onnx.helper.make_model(
+    #        graph=onnx.helper.make_graph(
+    #            name=graph_name,
+    #            nodes=[],
+    #            inputs=[param(input_name, dtype, shape)],
+    #            outputs=[param(input_name, dtype, shape)],
+    #            )
+    #        )
+    #
     identity_node = onnx.helper.make_node(
         "Identity",
         inputs=[input_name],
@@ -121,26 +133,56 @@ def einsum_direct_model_test():
 
 def einsum_decomposed_model(equation, ishapes, dtype):
     spec = einsum.einsum_spec(equation, ishapes)
-    oshape = spec.output.shape
-    input_names = [f"x{i}" for i in range(len(ishapes))]
-    output_name = "result"
+    ninputs = len(ishapes)
+    input_names = [f"in{i}" for i in range(ninputs)]
 
     # In two cases the output is just zeros or empty:
     # (1) empty if there are any 0 dims in the output shape,
     # (2) zeros if there are any 0 dims in any input shape
     # (because they either occur in the output, which would be
     # empty, or will be eliminated by ReduceSum and become zeros).
+    oshape = spec.output.shape
     if any(np.prod(shape) == 0 for shape in ishapes + [oshape]):
         tensor = np.zeros(oshape, dtype=dtype)
-        return make_constant_model('einsum_constant', output_name, tensor)
+        return make_constant_model('einsum_constant', "out", tensor)
 
+    # Each transform is either an onnx model transforming the input
+    # at that position or just a string with the name of the input
+    # which represents the identity transformation.
+    transforms = list(input_names)
+
+    for i in range(ninputs):
+        spec, transforms = einsum_diagonalize_input(spec, transforms, i, dtype)
+        spec, transforms = einsum_reducesum_input(spec, transforms, i, dtype)
+
+    while len(transforms) > 1:
+        spec, transforms = einsum_contract_inputs(spec, transforms, 0, 1, dtype)
+
+    return einsum_finalize(spec, transforms[0], dtype)
+
+def einsum_diagonalize_input(spec, transforms, i, dtype):
+    # TODO: implement
+    return spec, transforms
+
+def einsum_reducesum_input(spec, transforms, i, dtype):
+    # TODO: implement
+    return spec, transforms
+
+def einsum_contract_inputs(spec, transforms, i, j, dtype):
+    # TODO: implement
+    return spec, transforms
+
+def einsum_finalize(spec, transform, dtype):
     if spec.is_identity():
-        # The equation is the identity transformation on a single input.
-        return make_identity_model(
-                'einsum_identity', input_names[0], output_name,
-                dtype, oshape)
+        # The equation is the identity transformation.
+        if isinstance(transform, str):
+            return make_identity_model(
+                    'einsum_identity', transform, "out",
+                    dtype, spec.output.shape)
+        return transform
+    # TODO: transpose and/or reshape
+    return transform
 
-    # TODO cover all the other cases...
 
 def einsum_decomposed_model_test():
     print("einsum_decomposed_model_test() start")
