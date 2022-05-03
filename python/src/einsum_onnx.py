@@ -28,6 +28,15 @@ def squeeze_shape(ishape, axes):
         del oshape[a]
     return tuple(oshape)
 
+def unsqueeze_shape(ishape, axes):
+    oshape = list(ishape)
+    for a in sorted(nonneg(axes, len(ishape) + len(axes))):
+        oshape.insert(a, 1)
+    return tuple(oshape)
+
+def transpose_shape(ishape, perm):
+    return tuple(ishape[a] for a in perm)
+
 
 # onnx helpers
 def onnx_type(dtype):
@@ -142,6 +151,22 @@ class Transform:
         self.oshape = squeeze_shape(self.oshape, axes)
         return self
 
+    def unsqueeze(self, axes):
+        if len(axes) == 0:
+            return self
+        axes_tensor = np.array(axes, dtype=np.int64)
+        axes_name = self.next_name("axes")
+        self.nodes.append(make_constant_node(axes_name, axes_tensor))
+        unsqueeze_name = self.next_name("unsqueeze")
+        self.nodes.append(onnx.helper.make_node(
+            "Unsqueeze",
+            inputs=[self.oname, axes_name],
+            outputs=[unsqueeze_name],
+        ))
+        self.oname = unsqueeze_name
+        self.oshape = unsqueeze_shape(self.oshape, axes)
+        return self
+
     def diagonalize(self, axis1, axis2):
         assert 0 <= axis1 < axis2 < len(self.oshape)
         dim = self.oshape[axis1]
@@ -180,6 +205,22 @@ class Transform:
         ))
         self.oname = sum_name
         self.oshape = squeeze_shape(self.oshape, axes)
+        return self
+
+    def transpose(self, perm):
+        assert sorted(perm) == list(range(len(perm)))
+        assert len(perm) == len(self.oshape)
+        if len(perm) == 0:
+            return self
+        transpose_name = self.next_name("transpose")
+        self.nodes.append(onnx.helper.make_node(
+            "Transpose",
+            inputs=[self.oname],
+            outputs=[transpose_name],
+            perm=perm,
+        ))
+        self.oname = transpose_name
+        self.oshape = transpose_shape(self.oshape, perm)
         return self
 
 def make_identity_transform(dtype, shape, iname):
@@ -256,7 +297,6 @@ def einsum_decomposed_model(equation, ishapes, dtype):
         spec, transforms = einsum_contract_inputs(spec, transforms, 0, 1)
 
     transform = einsum_finalize(spec, transforms[0])
-    #print("final transform",transform)
     return transform.model(f"einsum({equation})")
 
 def einsum_squeeze_input(spec, transforms, i):
@@ -316,15 +356,19 @@ def einsum_contract_inputs(spec, transforms, i, j, dtype):
 
 def einsum_finalize(spec, transform):
     assert len(spec.inputs) == 1
-    in_idxs = set(spec.inputs[0].idxs)
-    out_idxs = set(spec.output.idxs)
-    assert in_idxs.issubset(out_idxs)
-    assert all(idx in in_idxs or spec.idx_map[idx] == 1 for idx in out_idxs)
+    ispec = spec.inputs[0]
+    in_idxs = set(ispec.idxs)
+    out_idxs = spec.output.idxs
+    assert in_idxs.issubset(set(out_idxs))
+    assert all(idx in in_idxs or spec.idxs_map[idx] == 1 for idx in out_idxs)
     if einsum_is_identity_spec(spec):
         # The equation is the identity transformation.
         return transform
-    # TODO: transpose and/or reshape
-    return transform
+    squeezed_out_idxs = [idx for idx in out_idxs if idx in in_idxs]
+    perm = tuple(ispec.idxs.index(idx) for idx in squeezed_out_idxs)
+    transform.transpose(perm)
+    axes = [a for a in range(len(out_idxs)) if out_idxs[a] not in in_idxs]
+    return transform.unsqueeze(axes)
 
 
 def einsum_decomposed_model_test():
@@ -355,6 +399,19 @@ def einsum_decomposed_model_test():
             ("isj->ij", [(2,4,3)]),
             ("ijs->ij", [(2,3,4)]),
             ("sitju->ij", [(4,2,5,3,6)]),
+            # transpose:
+            ("ij->ji", [(2,3)]),
+            ("ijk->jik", [(2,3,4)]),
+            ("ijk->jki", [(2,3,4)]),
+            ("ijk->kji", [(2,3,4)]),
+            ("ijk->ijk", [(2,3,4)]),
+            ("ijk->ikj", [(2,3,4)]),
+            ("ijk->kij", [(2,3,4)]),
+            # unsqueeze:
+            ("ij", [(1,2)]),
+            ("ij->ji", [(1,2)]),
+            ("ij", [(1,1)]),
+            ("ij->ji", [(1,1)]),
         ]:
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
