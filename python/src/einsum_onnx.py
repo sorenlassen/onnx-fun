@@ -16,6 +16,9 @@ def einsum_is_identity_spec(spec):
     assert spec.inputs[0].shape == spec.output.shape
     return True
 
+def shape_size(shape):
+    return np.prod(shape)
+
 def nonneg(axes, ndim):
     if isinstance(axes, int):
         assert -ndim <= axes < ndim
@@ -275,7 +278,7 @@ def einsum_decomposed_model(equation, ishapes, dtype):
     # (because they either occur in the output, which would be
     # empty, or will be eliminated by ReduceSum and become zeros).
     oshape = spec.output.shape
-    if any(np.prod(shape) == 0 for shape in ishapes + [oshape]):
+    if any(shape_size(shape) == 0 for shape in ishapes + [oshape]):
         tensor = np.zeros(oshape, dtype=dtype)
         return make_constant_model('einsum_constant', "out", tensor)
 
@@ -296,6 +299,7 @@ def einsum_decomposed_model(equation, ishapes, dtype):
         spec, transforms = einsum_diagonalize_input(spec, transforms, i)
         spec, transforms = einsum_reducesum_input(spec, transforms, i)
 
+    # TODO: optimize the contraction order
     while len(transforms) > 1:
         spec, transforms = einsum_contract_inputs(spec, transforms, 0, 1)
 
