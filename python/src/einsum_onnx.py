@@ -277,13 +277,12 @@ def einsum_reducesum_input(spec, transforms, i):
     assert tuple(shape) == transforms[i].oshape
 
     # ReduceSum the rest.
-    for idx in idxs_only_in_i - set(one_idxs):
-        axis = idxs.index(idx)
-        assert shape[axis] > 1
-        transforms[i].reducesum([axis])
-        del idxs[axis]
-        del shape[axis]
-        assert tuple(shape) == transforms[i].oshape
+    axes = [idxs.index(idx) for idx in idxs_only_in_i - set(one_idxs)]
+    transforms[i].reducesum(axes)
+    for a in sorted(axes, reverse=True):
+        del idxs[a]
+        del shape[a]
+    assert tuple(shape) == transforms[i].oshape
 
     ispec.idxs = idxs
     ispec.shape = tuple(shape)
