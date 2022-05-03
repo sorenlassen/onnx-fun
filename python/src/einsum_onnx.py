@@ -154,8 +154,27 @@ class Transform:
         return self
 
     def diagonalize(self, axis1, axis2):
-        # TODO: implement
-        return self
+        assert 0 <= axis1 < axis2 < len(self.oshape)
+        dim = self.oshape[axis1]
+        assert dim == self.oshape[axis2]
+        if dim != 1:
+            ndim = len(self.oshape)
+            indices_shape = self.oshape[:axis1] + (1,) + self.oshape[axis1 + 1:]
+            arange = np.arange(dim)
+            expanded = np.expand_dims(arange, tuple(range(1, ndim - axis2)))
+            indices = np.broadcast_to(expanded, indices_shape)
+            indices_name = self.next_name("indices")
+            self.nodes.append(make_constant_node(indices_name, indices))
+            gather_name = self.next_name("gather")
+            self.nodes.append(onnx.helper.make_node(
+                "GatherElements",
+                inputs=[self.oname, indices_name],
+                outputs=[gather_name],
+                axis=axis1,
+            ))
+            self.oname = gather_name
+            self.oshape = indices_shape
+        return self.squeeze([axis1])
 
     def reducesum(self, axes):
         if len(axes) == 0:
@@ -269,7 +288,7 @@ def einsum_diagonalize_input(spec, transforms, i):
     ispec = spec.inputs[i]
     idxs = list(ispec.idxs)
     shape = list(ispec.shape)
-    for a in reversed(range(len(idxs) - 1)):
+    for a in reversed(range(1, len(idxs))):
         idx = idxs[a]
         b = idxs.index(idx)
         if b != a:
@@ -331,6 +350,13 @@ def einsum_decomposed_model_test():
             ("isj->ij", [(2,1,3)]),
             ("ijs->ij", [(2,3,1)]),
             ("sitju->ij", [(1,2,1,3,1)]),
+            # diagonalize axes s,t:
+            ("ss->s", [(2,2)]),
+            ("ssuu->su", [(2,2,3,3)]),
+            ("sss->s", [(2,2,2)]),
+            ("iss->is", [(3,2,2)]),
+            ("sis->is", [(2,3,2)]),
+            ("ssi->si", [(2,2,3)]),
             # reducesum axes s,t,u:
             ("sij->ij", [(4,2,3)]),
             ("isj->ij", [(2,4,3)]),
