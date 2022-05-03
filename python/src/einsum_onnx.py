@@ -43,9 +43,9 @@ def onnx_type(dtype):
 
 def param(param_name, dtype, shape):
     return onnx.helper.make_tensor_value_info(
-            param_name,
-            onnx_type(dtype),
-            shape)
+        param_name,
+        onnx_type(dtype),
+        shape)
 
 def make_constant_node(output_name, tensor):
     tensor = np.asarray(tensor)
@@ -64,31 +64,20 @@ def make_constant_node(output_name, tensor):
 def make_constant_model(graph_name, output_name, tensor):
     constant_node = make_constant_node(output_name, tensor)
     return onnx.helper.make_model(
-            graph=onnx.helper.make_graph(
-                name=graph_name,
-                nodes=[constant_node],
-                inputs=[],
-                outputs=[param(output_name, tensor.dtype, tensor.shape)],
-                )
-            )
+        graph=onnx.helper.make_graph(
+            name=graph_name,
+            nodes=[constant_node],
+            inputs=[],
+            outputs=[param(output_name, tensor.dtype, tensor.shape)],
+        )
+    )
 
 def make_identity_node(input_name, output_name):
     return onnx.helper.make_node(
-            "Identity",
-            inputs=[input_name],
-            outputs=[output_name],
-        )
-
-def make_identity_model(graph_name, input_name, output_name, dtype, shape):
-    identity_node = make_identity_node(input_name, output_name)
-    return onnx.helper.make_model(
-            graph=onnx.helper.make_graph(
-                name=graph_name,
-                nodes=[identity_node],
-                inputs=[param(input_name, dtype, shape)],
-                outputs=[param(output_name, dtype, shape)],
-                )
-            )
+        "Identity",
+        inputs=[input_name],
+        outputs=[output_name],
+    )
 
 def run_model(model, *inputs):
     sess = onnxruntime.InferenceSession(model.SerializeToString())
@@ -203,21 +192,21 @@ def einsum_direct_model(equation, ishapes, dtype):
     input_names = [f"x{i}" for i in range(len(ishapes))]
     output_name = "result"
     einsum_node = onnx.helper.make_node(
-            "Einsum",
-            inputs=input_names,
-            outputs=[output_name],
-            equation=equation)
+        "Einsum",
+        inputs=input_names,
+        outputs=[output_name],
+        equation=equation)
     return onnx.helper.make_model(
-            graph=onnx.helper.make_graph(
-                name='einsum',
-                nodes=[einsum_node],
-                inputs=[
-                        param(name, dtype, shape)
-                        for name, shape in zip(input_names, ishapes)
-                    ],
-                outputs=[param(output_name, dtype, oshape)],
-                )
-            )
+        graph=onnx.helper.make_graph(
+            name='einsum',
+            nodes=[einsum_node],
+            inputs=[
+                param(name, dtype, shape)
+                for name, shape in zip(input_names, ishapes)
+            ],
+            outputs=[param(output_name, dtype, oshape)],
+        )
+    )
 
 def einsum_direct_model_test():
     print("einsum_direct_model_test() start")
@@ -225,7 +214,7 @@ def einsum_direct_model_test():
     for equation, ishapes in [
             ("ii->i", [(2,2)]),
             ("ij,jk", [(2,2),(2,2)]),
-            ]:
+        ]:
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
         model = einsum_direct_model(equation, ishapes, np.float64)
@@ -254,9 +243,9 @@ def einsum_decomposed_model(equation, ishapes, dtype):
     # which represents the identity transformation.
     ninputs = len(ishapes)
     transforms = [
-            make_identity_transform(dtype, ishapes[i], f"in{i}")
-            for i in range(ninputs)
-            ]
+        make_identity_transform(dtype, ishapes[i], f"in{i}")
+        for i in range(ninputs)
+    ]
 
     for i in range(ninputs):
         spec, transforms = einsum_squeeze_input(spec, transforms, i)
@@ -305,12 +294,12 @@ def einsum_reducesum_input(spec, transforms, i):
     idxs = list(ispec.idxs)
     shape = list(ispec.shape)
     assert len(idxs) == len(set(idxs)), \
-            "duplicates indexes after diagonalization pass"
-    idxs_in_other_inputs = [
-            idx in spec.inputs[j].idxs
-            for j in range(len(spec.inputs)) if j != i
-            ]
-    idxs_only_in_i = set(idxs) - set(idxs_in_other_inputs + spec.output.idxs)
+        "duplicates indexes after diagonalization pass"
+    idxs_in_other_inputs = {
+        idx in spec.inputs[j].idxs
+        for j in range(len(spec.inputs)) if j != i
+    }
+    idxs_only_in_i = set(idxs) - idxs_in_other_inputs - set(spec.output.idxs)
     axes = [idxs.index(idx) for idx in idxs_only_in_i]
     transforms[i].reducesum(axes)
     for a in sorted(axes, reverse=True):
@@ -362,7 +351,7 @@ def einsum_decomposed_model_test():
             ("isj->ij", [(2,4,3)]),
             ("ijs->ij", [(2,3,4)]),
             ("sitju->ij", [(4,2,5,3,6)]),
-            ]:
+        ]:
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
         model = einsum_decomposed_model(equation, ishapes, np.float64)
