@@ -153,6 +153,10 @@ class Transform:
         self.oshape = squeeze_shape(self.oshape, axes)
         return self
 
+    def diagonalize(self, axis1, axis2):
+        # TODO: implement
+        return self
+
     def reducesum(self, axes):
         if len(axes) == 0:
             return self
@@ -262,7 +266,19 @@ def einsum_squeeze_input(spec, transforms, i):
     return spec, transforms
 
 def einsum_diagonalize_input(spec, transforms, i):
-    # TODO: implement
+    ispec = spec.inputs[i]
+    idxs = list(ispec.idxs)
+    shape = list(ispec.shape)
+    for a in reversed(range(len(idxs) - 1)):
+        idx = idxs[a]
+        b = idxs.index(idx)
+        if b != a:
+            transforms[i].diagonalize(b, a)
+            del idxs[b]
+            del shape[b]
+            assert tuple(shape) == transforms[i].oshape
+    ispec.idxs = idxs
+    ispec.shape = tuple(shape)
     return spec, transforms
 
 def einsum_reducesum_input(spec, transforms, i):
