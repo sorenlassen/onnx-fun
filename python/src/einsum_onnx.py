@@ -316,6 +316,10 @@ def einsum_contract_inputs(spec, transforms, i, j, dtype):
 
 def einsum_finalize(spec, transform):
     assert len(spec.inputs) == 1
+    in_idxs = set(spec.inputs[0].idxs)
+    out_idxs = set(spec.output.idxs)
+    assert in_idxs.issubset(out_idxs)
+    assert all(idx in in_idxs or spec.idx_map[idx] == 1 for idx in out_idxs)
     if einsum_is_identity_spec(spec):
         # The equation is the identity transformation.
         return transform
