@@ -261,29 +261,12 @@ def einsum_reducesum_input(spec, transforms, i):
             for j in range(len(spec.inputs)) if j != i
             ]
     idxs_only_in_i = set(idxs) - set(idxs_in_other_inputs + spec.output.idxs)
-
-    # Squeeze any idxs only in inputs[i] that have dim 1.
-    one_axes = []
-    one_idxs = []
-    for idx in idxs_only_in_i:
-        axis = idxs.index(idx)
-        if shape[axis] == 1:
-            one_axes.append(axis)
-            one_idxs.append(idx)
-    transforms[i].squeeze(one_axes)
-    for a in sorted(one_axes, reverse=True):
-        del idxs[a]
-        del shape[a]
-    assert tuple(shape) == transforms[i].oshape
-
-    # ReduceSum the rest.
-    axes = [idxs.index(idx) for idx in idxs_only_in_i - set(one_idxs)]
+    axes = [idxs.index(idx) for idx in idxs_only_in_i]
     transforms[i].reducesum(axes)
     for a in sorted(axes, reverse=True):
         del idxs[a]
         del shape[a]
     assert tuple(shape) == transforms[i].oshape
-
     ispec.idxs = idxs
     ispec.shape = tuple(shape)
     return spec, transforms
