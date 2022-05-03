@@ -294,6 +294,7 @@ def einsum_contract_inputs(spec, transforms, i, j, dtype):
     return spec, transforms
 
 def einsum_finalize(spec, transform):
+    assert len(spec.inputs) == 1
     if einsum_is_identity_spec(spec):
         # The equation is the identity transformation.
         return transform
