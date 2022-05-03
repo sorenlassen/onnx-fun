@@ -16,6 +16,12 @@ def einsum_is_identity_spec(spec):
     assert spec.inputs[0].shape == spec.output.shape
     return True
 
+def idxs_not_in_input_positions(spec, input_positions):
+    return {
+        idx in spec.inputs[i].idxs
+        for i in range(len(spec.inputs)) if i not in input_positions
+    }
+
 def shape_size(shape):
     return np.prod(shape)
 
@@ -342,10 +348,7 @@ def einsum_reducesum_input(spec, transforms, i):
     shape = list(ispec.shape)
     assert len(idxs) == len(set(idxs)), \
         "duplicates indexes after diagonalization pass"
-    idxs_in_other_inputs = {
-        idx in spec.inputs[j].idxs
-        for j in range(len(spec.inputs)) if j != i
-    }
+    idxs_in_other_inputs = idxs_not_in_input_positions(spec, {i})
     idxs_only_in_i = set(idxs) - idxs_in_other_inputs - set(spec.output.idxs)
     axes = [idxs.index(idx) for idx in idxs_only_in_i]
     transforms[i].reducesum(axes)
