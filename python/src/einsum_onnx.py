@@ -289,6 +289,9 @@ def einsum_decomposed_model(equation, ishapes, dtype):
     ]
 
     for i in range(ninputs):
+        # squeezing avoids broadcasting in contractions amd it can potentially 
+        # be an optimization to skip some diagonalizations and reducesums and
+        # axes to juggle in contractions
         spec, transforms = einsum_squeeze_input(spec, transforms, i)
         spec, transforms = einsum_diagonalize_input(spec, transforms, i)
         spec, transforms = einsum_reducesum_input(spec, transforms, i)
