@@ -236,6 +236,7 @@ def einsum_decomposed_model(equation, ishapes, dtype):
             ]
 
     for i in range(ninputs):
+        spec, transforms = einsum_squeeze_input(spec, transforms, i)
         spec, transforms = einsum_diagonalize_input(spec, transforms, i)
         spec, transforms = einsum_reducesum_input(spec, transforms, i)
 
@@ -245,6 +246,20 @@ def einsum_decomposed_model(equation, ishapes, dtype):
     transform = einsum_finalize(spec, transforms[0])
     #print("final transform",transform)
     return transform.model(f"einsum({equation})")
+
+def einsum_squeeze_input(spec, transforms, i):
+    ispec = spec.inputs[i]
+    idxs = list(ispec.idxs)
+    shape = list(ispec.shape)
+    axes = [a for a in range(len(shape)) if shape[a] == 1]
+    transforms[i].squeeze(axes)
+    for a in sorted(axes, reverse=True):
+        del idxs[a]
+        del shape[a]
+    assert tuple(shape) == transforms[i].oshape
+    ispec.idxs = idxs
+    ispec.shape = tuple(shape)
+    return spec, transforms
 
 def einsum_diagonalize_input(spec, transforms, i):
     # TODO: implement
