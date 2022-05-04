@@ -18,8 +18,9 @@ def einsum_is_identity_spec(spec):
 
 def idxs_not_in_input_positions(spec, input_positions):
     return {
-        idx in spec.inputs[i].idxs
-        for i in range(len(spec.inputs)) if i not in input_positions
+        idx
+            for i in range(len(spec.inputs)) if i not in input_positions
+                for idx in spec.inputs[i].idxs
     }
 
 def shape_size(shape):
@@ -113,36 +114,45 @@ def infer_shapes_and_run_model(model, *inputs):
     return run_model(model, *inputs)
 
 
+Shape = Tuple[int, ...]
+
 @dataclass
 class Transform:
-    iname: str
-    ishape: Tuple[int, ...]
+    inames: List[str]
+    ishapes: List[Shape]
     dtype: Union[np.dtype, type] # e.g. np.type(np.int32) or np.int32
     oname: str
     oshape: Tuple[int, ...]
     nodes: List[onnx.onnx_ml_pb2.NodeProto]
 
     def graph(self, graph_name):
+        assert len(self.inames) == len(self.ishapes)
         if len(self.nodes) == 0:
             # Empty graphs don't come compose with onnx.compose, so
             # we insert an Identity node for robustness.
+            assert len(self.inames) == 1
             final_oname = f"{graph_name}/out"
-            final_nodes = [make_identity_node(self.iname, final_oname)]
+            final_nodes = [make_identity_node(self.inames[0], final_oname)]
         else:
             final_oname = self.oname
             final_nodes = self.nodes
         return onnx.helper.make_graph(
-                name=graph_name,
-                nodes=final_nodes,
-                inputs=[param(self.iname, self.dtype, self.ishape)],
-                outputs=[param(final_oname, self.dtype, self.oshape)],
-                )
+            name=graph_name,
+            nodes=final_nodes,
+            inputs=[
+                param(iname, self.dtype, ishape)
+                    for iname, ishape in zip(self.inames, self.ishapes)
+            ],
+            outputs=[param(final_oname, self.dtype, self.oshape)],
+        )
 
     def model(self, graph_name):
-        return onnx.helper.make_model(graph = self.graph(graph_name))
+        graph = self.graph(graph_name)
+        #print("GRAPH:",graph)
+        return onnx.helper.make_model(graph)
 
     def next_name(self, stem):
-        return f"{self.iname}/{stem}{len(self.nodes)}"
+        return f"{self.inames[0]}/{stem}{len(self.nodes)}"
 
     def squeeze(self, axes):
         if len(axes) == 0:
@@ -219,7 +229,7 @@ class Transform:
     def transpose(self, perm):
         assert sorted(perm) == list(range(len(perm)))
         assert len(perm) == len(self.oshape)
-        if len(perm) == 0:
+        if tuple(perm) == tuple(range(len(self.oshape))):
             return self
         transpose_name = self.next_name("transpose")
         self.nodes.append(onnx.helper.make_node(
@@ -232,8 +242,45 @@ class Transform:
         self.oshape = transpose_shape(self.oshape, perm)
         return self
 
+    def matmul(self, arg):
+        if len(self.oshape) == 1 or len(arg.oshape) == 1:
+            matmul_oshape = np.broadcast_shapes(self.oshape, arg.oshape)[:-1]
+        else:
+            assert np.broadcast_shapes(self.oshape[-1:], arg.oshape[-2:-1]), \
+                "shouldn't raise ValueError: shape mismatch"
+            matmul_oshape = \
+                np.broadcast_shapes(self.oshape[:-2], arg.oshape[:-2]) \
+                    + [self.oshape[-2], arg.oshape[-1]]
+        self.inames += arg.inames
+        self.ishapes += arg.ishapes
+        self.nodes += arg.nodes
+        matmul_name = self.next_name("matmul")
+        self.nodes.append(onnx.helper.make_node(
+            "MatMul",
+            inputs=[self.oname, arg.oname],
+            outputs=[matmul_name],
+        ))
+        self.oname = matmul_name
+        self.oshape = matmul_oshape
+        return self
+
+    def mul(self, arg):
+        mul_shape = np.broadcast_shapes(self.oshape, arg.oshape)
+        self.inames += arg.inames
+        self.ishapes += arg.ishapes
+        self.nodes += arg.nodes
+        mul_name = self.next_name("mul")
+        self.nodes.append(onnx.helper.make_node(
+            "Mul",
+            inputs=[self.oname, arg.oname],
+            outputs=[mul_name],
+        ))
+        self.oname = mul_name
+        self.oshape = mul_shape
+        return self
+
 def make_identity_transform(dtype, shape, iname):
-    return Transform(iname, shape, dtype, iname, shape, [])
+    return Transform([iname], [shape], dtype, iname, shape, [])
 
 
 def einsum_direct_model(equation, ishapes, dtype):
@@ -360,9 +407,91 @@ def einsum_reducesum_input(spec, transforms, i):
     ispec.shape = tuple(shape)
     return spec, transforms
 
-def einsum_contract_inputs(spec, transforms, i, j, dtype):
-    # TODO: implement
+def einsum_transpose_input(spec, transforms, i, perm):
+    transforms[i].transpose(perm)
+    ispec = spec.inputs[i]
+    ispec.idxs = list(transpose_shape(ispec.idxs, perm))
+    ispec.shape = transpose_shape(ispec.shape, perm)
+    assert transforms[i].oshape == ispec.shape
     return spec, transforms
+
+def einsum_contract_inputs(spec, transforms, i, j):
+    ispec = spec.inputs[i]
+    jspec = spec.inputs[j]
+    # simplify cases below with invariant: i's rank >= j's rank
+    if len(jspec.shape) > len(ispec.shape):
+        return einsum_contract_inputs(spec, transforms, j, i)
+
+    ij_idxs = set(ispec.idxs) & set(jspec.idxs)
+
+    # try to use MatMul:
+    idxs_in_other_inputs = idxs_not_in_input_positions(spec, {i, j})
+    idxs_only_in_ij = ij_idxs - idxs_in_other_inputs - set(spec.output.idxs)
+    if len(idxs_only_in_ij) > 0:
+        # there are one or more idxs that are not in the output and
+        # not in any other inputs, so we can use one as MatMul axis
+        # (and the rest will be eliminated with reducesum afterwards)
+        if len(jspec.idxs) == 1:
+            [idx] = jspec.idxs
+            # Transpose(i) to bring idx to back
+            i_ndim = len(ispec.idxs)
+            i_axis = ispec.idxs.index(idx)
+            perm = tuple(range(i_axis)) + tuple(range(i_axis + 1, i_ndim)) + (i_axis,)
+            spec, transforms = einsum_transpose_input(spec, transforms, i, perm)
+            transforms[i].matmul(transforms[j])
+            ispec.idxs.pop()
+            ispec.shape = ispec.shape[:-1]
+            assert transforms[i].oshape == ispec.shape
+            del transforms[j]
+            del spec.inputs[j]
+            return spec, transforms
+
+        # TODO: capture other special cases where MatMul can be done with
+        #       minimum amounts of transposistions, unsqueezing, and broadcast
+
+        # multiply along the highest dim axis with shared
+        maxdim = max(spec.idxs_map[idx] for idx in idxs_only_in_ij)
+        maxidx = next(idx for idx in idxs_only_in_ij if spec.idxs_map[idx] == maxdim)
+        assert maxdim == spec.idxs_map[maxidx]
+        # following are true because 1 dim axes have been squeezed, so no broadcast
+        assert maxdim == ispec.shape[ispec.idxs.index(maxidx)]
+        assert maxdim == jspec.shape[jspec.idxs.index(maxidx)]
+        # TODO: transpose/unsqueeze i, j so maxidx is last/penultimate axes in i/j
+        #       etc; and then squeeze/reducesum as needed
+
+    # no-MatMul, just transpose, unsqueeze, multiply, and reducesum:
+
+    # transpose j so it ends with the idxs that also occur in i, in the same order
+    j_idxs_unshared = [idx for idx in jspec.idxs if idx not in ij_idxs]
+    j_idxs_shared = [idx for idx in ispec.idxs if idx in ij_idxs]
+    j_idxs_transposed = j_idxs_unshared + j_idxs_shared
+    assert sorted(j_idxs_transposed) == sorted(jspec.idxs)
+    perm = tuple(jspec.idxs.index(idx) for idx in j_idxs_transposed)
+    assert j_idxs_transposed == list(transpose_shape(jspec.idxs, perm))
+    transforms[j].transpose(perm)
+    jspec.idxs = j_idxs_transposed
+    jspec.shape = transpose_shape(jspec.shape, perm)
+    assert jspec.shape == transforms[j].oshape
+
+    # unsqueeze j so ends with all i's idxs, in the same order
+    axes = [a for a in range(-len(ispec.idxs), 0) if ispec.idxs[a] not in ij_idxs]
+    j_idxs_unsqueezed = j_idxs_unshared + ispec.idxs
+    transforms[j].unsqueeze(axes)
+    jspec.idxs = j_idxs_unsqueezed
+    jspec.shape = unsqueeze_shape(jspec.shape, axes)
+    assert jspec.shape == transforms[j].oshape
+    assert len(jspec.shape) == len(j_idxs_unsqueezed)
+
+    transforms[i].mul(transforms[j])
+    ispec.idxs = j_idxs_unsqueezed
+    ispec.shape = np.broadcast_shapes(ispec.shape, jspec.shape)
+    assert ispec.shape == transforms[i].oshape
+    assert len(ispec.shape) == len(j_idxs_unsqueezed)
+    del transforms[j]
+    del spec.inputs[j]
+    if j < i:
+        i -= 1
+    return einsum_reducesum_input(spec, transforms, i)
 
 def einsum_finalize(spec, transform):
     assert len(spec.inputs) == 1
@@ -422,6 +551,11 @@ def einsum_decomposed_model_test():
             ("ij->ji", [(1,2)]),
             ("ij", [(1,1)]),
             ("ij->ji", [(1,1)]),
+            # matmul:
+            ("ij,j", [(2,3),(3,)]),
+            ("i,i", [(2,),(2,)]),
+            ("ij,ij", [(2,3),(2,3)]),
+            ("ij,ji", [(2,3),(3,2)]),
         ]:
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
