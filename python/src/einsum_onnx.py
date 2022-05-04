@@ -130,7 +130,7 @@ class Transform:
             # Empty graphs don't come compose with onnx.compose, so
             # we insert an Identity node for robustness.
             assert len(self.inames) == 1
-            final_oname = f"{graph_name}/out"
+            final_oname = f"{graph_name}_out"
             final_nodes = [make_identity_node(self.inames[0], final_oname)]
         else:
             final_oname = self.oname
@@ -151,7 +151,7 @@ class Transform:
         return onnx.helper.make_model(graph)
 
     def next_name(self, stem):
-        return f"{self.inames[0]}/{stem}{len(self.nodes)}"
+        return f"{self.inames[0]}_{stem}_{len(self.nodes)}"
 
     def squeeze(self, axes):
         if len(axes) == 0:
