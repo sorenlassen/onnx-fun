@@ -12,7 +12,7 @@ def mutate_shape(shape, mutation_dict):
     return tuple(lst)
 
 def perm_from_dict(ndim, perm_dict):
-    '''perm_dict maps axes to axes, each axes in [-ndim...ndim)'''
+    '''perm_dict maps axes to axes, each axis in [-ndim...ndim)'''
     assert all(-ndim <= k < ndim and -ndim <= v < ndim for k, v in perm_dict.items())
     def nonneg(a): return ndim + a if a < 0 else a
     d = {nonneg(k): nonneg(v) for k,v in perm_dict.items()}
