@@ -108,7 +108,6 @@ def run_model(model, *inputs):
     return sess.run(output_names, inputs_dict)
 
 def infer_shapes_and_run_model(model, *inputs):
-    onnx.checker.check_model(model)
     model = onnx.shape_inference.infer_shapes(model)
     onnx.checker.check_model(model)
     return run_model(model, *inputs)
