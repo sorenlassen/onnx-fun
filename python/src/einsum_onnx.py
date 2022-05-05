@@ -140,7 +140,7 @@ class Transform:
             nodes=final_nodes,
             inputs=[
                 param(iname, self.dtype, ishape)
-                    for iname, ishape in zip(self.inames, self.ishapes)
+                    for iname, ishape in sorted(zip(self.inames, self.ishapes))
             ],
             outputs=[param(final_oname, self.dtype, self.oshape)],
         )
@@ -338,8 +338,10 @@ def einsum_decomposed_model(equation, ishapes, dtype):
     # at that position or just a string with the name of the input
     # which represents the identity transformation.
     ninputs = len(ishapes)
+    assert ninputs <= 100 # for convenience to keep input names short
+    in_name = lambda i: "in%02d" % i # sortable names for i < 100
     transforms = [
-        make_identity_transform(dtype, ishapes[i], f"in{i}")
+        make_identity_transform(dtype, ishapes[i], in_name(i))
         for i in range(ninputs)
     ]
 
