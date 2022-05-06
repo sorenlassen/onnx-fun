@@ -1,10 +1,24 @@
 from dataclasses import dataclass
 from typing import List, Tuple, Union
+from copy import copy
 import string
 import numpy as np
 import onnx # type: ignore
 import onnxruntime # type: ignore
 import einsum # type: ignore
+
+
+# list/tuple helpers
+def nonneg(pos, length):
+    if isinstance(pos, int):
+        assert -length <= pos < length
+        return pos if pos >= 0 else pos + length
+    return map(lambda p: nonneg(p, length), pos)
+
+def omit(seq, *positions):
+    for p in sorted(nonneg(positions, len(seq)), reverse=True):
+        seq = seq[:p] + seq[p+1:]
+    return seq
 
 
 # EinsumSpec helpers
@@ -16,21 +30,8 @@ def einsum_is_identity_spec(spec):
     assert spec.inputs[0].shape == spec.output.shape
     return True
 
-def idxs_not_in_input_positions(spec, input_positions):
-    return {
-        idx
-            for i in range(len(spec.inputs)) if i not in input_positions
-                for idx in spec.inputs[i].idxs
-    }
-
 def shape_size(shape):
     return np.prod(shape)
-
-def nonneg(axes, ndim):
-    if isinstance(axes, int):
-        assert -ndim <= axes < ndim
-        return axes if axes >= 0 else axes + ndim
-    return list(map(lambda a: nonneg(a, ndim), axes))
 
 def squeeze_shape(ishape, axes):
     oshape = list(ishape)
@@ -396,7 +397,9 @@ def einsum_reducesum_input(spec, transforms, i):
     shape = list(ispec.shape)
     assert len(idxs) == len(set(idxs)), \
         "duplicates indexes after diagonalization pass"
-    idxs_in_other_inputs = idxs_not_in_input_positions(spec, {i})
+    idxs_in_other_inputs = {
+        idx for ispec in omit(spec.inputs, i) for idx in ispec.idxs
+    }
     idxs_only_in_i = set(idxs) - idxs_in_other_inputs - set(spec.output.idxs)
     axes = [idxs.index(idx) for idx in idxs_only_in_i]
     transforms[i].reducesum(axes)
@@ -426,7 +429,9 @@ def einsum_contract_inputs(spec, transforms, i, j):
     ij_idxs = set(ispec.idxs) & set(jspec.idxs)
 
     # try to use MatMul:
-    idxs_in_other_inputs = idxs_not_in_input_positions(spec, {i, j})
+    idxs_in_other_inputs = {
+        idx for ispec in omit(spec.inputs, i, j) for idx in ispec.idxs
+    }
     idxs_only_in_ij = ij_idxs - idxs_in_other_inputs - set(spec.output.idxs)
     if len(idxs_only_in_ij) > 0:
         # there are one or more idxs that are not in the output and
