@@ -420,84 +420,59 @@ def einsum_transpose_input(spec, transforms, i, perm):
     return spec, transforms
 
 def einsum_contract_inputs(spec, transforms, i, j):
-    ispec = spec.inputs[i]
-    jspec = spec.inputs[j]
-    # simplify cases below with invariant: i's rank >= j's rank
-    if len(jspec.shape) > len(ispec.shape):
-        return einsum_contract_inputs(spec, transforms, j, i)
-
-    ij_idxs = set(ispec.idxs) & set(jspec.idxs)
-
-    # try to use MatMul:
+    i_ispec = spec.inputs[i]
+    j_ispec = spec.inputs[j]
+    ij_idxs = set(i_ispec.idxs) & set(j_ispec.idxs)
     idxs_in_other_inputs = {
         idx for ispec in omit(spec.inputs, i, j) for idx in ispec.idxs
     }
-    idxs_only_in_ij = ij_idxs - idxs_in_other_inputs - set(spec.output.idxs)
-    if len(idxs_only_in_ij) > 0:
-        # there are one or more idxs that are not in the output and
-        # not in any other inputs, so we can use one as MatMul axis
-        # (and the rest will be eliminated with reducesum afterwards)
-        if len(jspec.idxs) == 1:
-            [idx] = jspec.idxs
-            # Transpose(i) to bring idx to back
-            i_ndim = len(ispec.idxs)
-            i_axis = ispec.idxs.index(idx)
-            perm = tuple(range(i_axis)) + tuple(range(i_axis + 1, i_ndim)) + (i_axis,)
-            spec, transforms = einsum_transpose_input(spec, transforms, i, perm)
-            transforms[i].matmul(transforms[j])
-            ispec.idxs.pop()
-            ispec.shape = ispec.shape[:-1]
-            assert transforms[i].oshape == ispec.shape
-            del transforms[j]
-            del spec.inputs[j]
-            return spec, transforms
+    idxs2keep = idxs_in_other_inputs.union(spec.output.idxs)
+    idxs2reduce = ij_idxs.difference(idxs2keep)
+    if len(idxs2reduce) == 0:
+        return einsum_mul_inputs(spec, transforms, i, j)
+    else:
+        return einsum_matmul_inputs(spec, transforms, idxs2reduce, i, j)
 
-        # TODO: capture other special cases where MatMul can be done with
-        #       minimum amounts of transposistions, unsqueezing, and broadcast
+def einsum_matmul_inputs(spec, transforms, idxs2reduce, i, j):
+    # placeholder implementation
+    spec, transforms = einsum_mul_inputs(spec, transforms, i, j)
+    if j < i:
+        i -= 1 # j's removal shifted i one position to the left
+    return einsum_reducesum_input(spec, transforms, i)
 
-        # multiply along the highest dim axis with shared
-        maxdim = max(spec.idxs_map[idx] for idx in idxs_only_in_ij)
-        maxidx = next(idx for idx in idxs_only_in_ij if spec.idxs_map[idx] == maxdim)
-        assert maxdim == spec.idxs_map[maxidx]
-        # following are true because 1 dim axes have been squeezed, so no broadcast
-        assert maxdim == ispec.shape[ispec.idxs.index(maxidx)]
-        assert maxdim == jspec.shape[jspec.idxs.index(maxidx)]
-        # TODO: transpose/unsqueeze i, j so maxidx is last/penultimate axes in i/j
-        #       etc; and then squeeze/reducesum as needed
-
-    # no-MatMul, just transpose, unsqueeze, multiply, and reducesum:
-
+def einsum_mul_inputs(spec, transforms, i, j):
+    i_ispec = spec.inputs[i]
+    j_ispec = spec.inputs[j]
+    ij_idxs = set(i_ispec.idxs) & set(j_ispec.idxs)
     # transpose j so it ends with the idxs that also occur in i, in the same order
-    j_idxs_unshared = [idx for idx in jspec.idxs if idx not in ij_idxs]
-    j_idxs_shared = [idx for idx in ispec.idxs if idx in ij_idxs]
+    j_idxs_unshared = [idx for idx in j_ispec.idxs if idx not in ij_idxs]
+    j_idxs_shared = [idx for idx in i_ispec.idxs if idx in ij_idxs]
     j_idxs_transposed = j_idxs_unshared + j_idxs_shared
-    assert sorted(j_idxs_transposed) == sorted(jspec.idxs)
-    perm = tuple(jspec.idxs.index(idx) for idx in j_idxs_transposed)
-    assert j_idxs_transposed == list(transpose_shape(jspec.idxs, perm))
+    assert sorted(j_idxs_transposed) == sorted(j_ispec.idxs)
+    perm = tuple(j_ispec.idxs.index(idx) for idx in j_idxs_transposed)
+    assert j_idxs_transposed == list(transpose_shape(j_ispec.idxs, perm))
     transforms[j].transpose(perm)
-    jspec.idxs = j_idxs_transposed
-    jspec.shape = transpose_shape(jspec.shape, perm)
-    assert jspec.shape == transforms[j].oshape
+    j_ispec.idxs = j_idxs_transposed
+    j_ispec.shape = transpose_shape(j_ispec.shape, perm)
+    assert j_ispec.shape == transforms[j].oshape
 
     # unsqueeze j so ends with all i's idxs, in the same order
-    axes = [a for a in range(-len(ispec.idxs), 0) if ispec.idxs[a] not in ij_idxs]
-    j_idxs_unsqueezed = j_idxs_unshared + ispec.idxs
+    axes = [a for a in range(-len(i_ispec.idxs), 0) if i_ispec.idxs[a] not in ij_idxs]
+    j_idxs_unsqueezed = j_idxs_unshared + i_ispec.idxs
     transforms[j].unsqueeze(axes)
-    jspec.idxs = j_idxs_unsqueezed
-    jspec.shape = unsqueeze_shape(jspec.shape, axes)
-    assert jspec.shape == transforms[j].oshape
-    assert len(jspec.shape) == len(j_idxs_unsqueezed)
+    j_ispec.idxs = j_idxs_unsqueezed
+    j_ispec.shape = unsqueeze_shape(j_ispec.shape, axes)
+    assert j_ispec.shape == transforms[j].oshape
+    assert len(j_ispec.shape) == len(j_idxs_unsqueezed)
 
     transforms[i].mul(transforms[j])
-    ispec.idxs = j_idxs_unsqueezed
-    ispec.shape = np.broadcast_shapes(ispec.shape, jspec.shape)
-    assert ispec.shape == transforms[i].oshape
-    assert len(ispec.shape) == len(j_idxs_unsqueezed)
+    i_ispec.idxs = j_idxs_unsqueezed
+    i_ispec.shape = np.broadcast_shapes(i_ispec.shape, j_ispec.shape)
+    assert i_ispec.shape == transforms[i].oshape
+    assert len(i_ispec.shape) == len(j_idxs_unsqueezed)
     del transforms[j]
     del spec.inputs[j]
-    if j < i:
-        i -= 1
-    return einsum_reducesum_input(spec, transforms, i)
+    return spec, transforms
 
 def einsum_finalize(spec, transform):
     assert len(spec.inputs) == 1
