@@ -443,28 +443,32 @@ def einsum_matmul_inputs(spec, transforms, idxs2reduce, i, j):
 def einsum_mul_inputs(spec, transforms, i, j):
     i_ispec = spec.inputs[i]
     j_ispec = spec.inputs[j]
-    ij_idxs = set(i_ispec.idxs) & set(j_ispec.idxs)
+    i_idxs = i_ispec.idxs
+    j_idxs = j_ispec.idxs
+    ij_idxs = set(i_idxs) & set(j_idxs)
+
     # transpose j so it ends with the idxs that also occur in i, in the same order
-    j_idxs_unshared = [idx for idx in j_ispec.idxs if idx not in ij_idxs]
-    j_idxs_shared = [idx for idx in i_ispec.idxs if idx in ij_idxs]
+    j_idxs_unshared = [idx for idx in j_idxs if idx not in ij_idxs]
+    j_idxs_shared = [idx for idx in i_idxs if idx in ij_idxs]
     j_idxs_transposed = j_idxs_unshared + j_idxs_shared
-    assert sorted(j_idxs_transposed) == sorted(j_ispec.idxs)
-    perm = tuple(j_ispec.idxs.index(idx) for idx in j_idxs_transposed)
-    assert j_idxs_transposed == list(transpose_shape(j_ispec.idxs, perm))
+    assert sorted(j_idxs_transposed) == sorted(j_idxs)
+    perm = tuple(j_idxs.index(idx) for idx in j_idxs_transposed)
+    assert j_idxs_transposed == list(transpose_shape(j_idxs, perm))
     transforms[j].transpose(perm)
     j_ispec.idxs = j_idxs_transposed
     j_ispec.shape = transpose_shape(j_ispec.shape, perm)
     assert j_ispec.shape == transforms[j].oshape
 
     # unsqueeze j so ends with all i's idxs, in the same order
-    axes = [a for a in range(-len(i_ispec.idxs), 0) if i_ispec.idxs[a] not in ij_idxs]
-    j_idxs_unsqueezed = j_idxs_unshared + i_ispec.idxs
+    axes = [a for a in range(-len(i_idxs), 0) if i_idxs[a] not in ij_idxs]
+    j_idxs_unsqueezed = j_idxs_unshared + i_idxs
     transforms[j].unsqueeze(axes)
     j_ispec.idxs = j_idxs_unsqueezed
     j_ispec.shape = unsqueeze_shape(j_ispec.shape, axes)
     assert j_ispec.shape == transforms[j].oshape
     assert len(j_ispec.shape) == len(j_idxs_unsqueezed)
 
+    # mul() broadcasts i to unsqueezed j's rank
     transforms[i].mul(transforms[j])
     i_ispec.idxs = j_idxs_unsqueezed
     i_ispec.shape = np.broadcast_shapes(i_ispec.shape, j_ispec.shape)
