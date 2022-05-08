@@ -38,16 +38,16 @@ def onix_model(op_type, *inputs, shape=None, dtype=None, **attributes):
         dtype = inputs[0].dtype if inputs else np.float64
     input_names = [f"input{i}" for i in range(len(inputs))]
     node = onnx.helper.make_node(
-        op_type,
+        op_type=op_type,
         inputs=input_names,
         outputs=["output"],
         **attributes)
     inputs = [param(n, t.dtype, t.shape) for n, t in zip(input_names, inputs)]
     graph = onnx.helper.make_graph(
-        [node],
+        nodes=[node],
+        name=op_type,
         inputs=inputs,
-        outputs=[param("output", dtype, shape)],
-        name=op_type)
+        outputs=[param("output", dtype, shape)])
     return onnx.helper.make_model(graph=graph)
 
 def onix(op_type, *inputs, shape=None, dtype=None, **attributes):
