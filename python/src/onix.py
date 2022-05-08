@@ -33,26 +33,25 @@ def infer_shapes_and_run_model(model, *inputs):
     onnx.checker.check_model(model)
     return run_model(model, *inputs)
 
-def input_name(i):
-    return f"input{i}"
-
-def input_param(i, tensor):
-    return param(input_name(i), tensor.dtype, tensor.shape)
-
-def onix(opname, oshape, *inputs, dtype=None, **attributes):
+def onix_model(op_type, *inputs, shape=None, dtype=None, **attributes):
     if dtype is None:
-        dtype = inputs[0].dtype if len(inputs) > 0 else np.float64
+        dtype = inputs[0].dtype if inputs else np.float64
+    input_names = [f"input{i}" for i in range(len(inputs))]
     node = onnx.helper.make_node(
-        opname,
-        inputs=[input_name(i) for i, _ in enumerate(inputs)],
+        op_type,
+        inputs=input_names,
         outputs=["output"],
         **attributes)
+    inputs = [param(n, t.dtype, t.shape) for n, t in zip(input_names, inputs)]
     graph = onnx.helper.make_graph(
         [node],
-        inputs=[input_param(i, t) for i, t in enumerate(inputs)],
-        outputs=[param("output", dtype, oshape)],
-        name=opname)
-    model = onnx.helper.make_model(graph=graph)
+        inputs=inputs,
+        outputs=[param("output", dtype, shape)],
+        name=op_type)
+    return onnx.helper.make_model(graph=graph)
+
+def onix(op_type, *inputs, shape=None, dtype=None, **attributes):
+    model = onix_model(op_type, *inputs, shape=shape, dtype=dtype, **attributes)
     [result] = infer_shapes_and_run_model(model, *inputs)
     return result
 
@@ -60,15 +59,15 @@ def onix_test():
     print("onix_test() start")
 
     a2 = np.array([1.1,1.2])
-    np.testing.assert_equal(a2, onix("Identity", (2,), a2))
+    np.testing.assert_equal(a2, onix("Identity", a2))
 
     r423 = np.random.rand(4,2,3)
     r5132 = np.random.rand(5,1,3,2)
     np.testing.assert_almost_equal(r423 @ r5132, \
-        onix("MatMul", (5,4,2,2), r423, r5132))
+        onix("MatMul", r423, r5132))
 
     np.testing.assert_almost_equal(r423 @ r5132, \
-        onix("Einsum", (5,4,2,2), r423, r5132, equation="abc,dace->dabe"))
+        onix("Einsum", r423, r5132, equation="abc,dace->dabe"))
 
     print("onix_test() end")
 
