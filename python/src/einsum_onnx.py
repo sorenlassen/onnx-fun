@@ -45,8 +45,14 @@ def unsqueeze_shape(ishape, axes):
         oshape.insert(a, 1)
     return tuple(oshape)
 
-def transpose_shape(ishape, perm):
+def transpose_seq(ishape, perm):
     return tuple(ishape[a] for a in perm)
+
+def transpose_perm(original_seq, transposed_seq):
+    assert sorted(original_seq) == sorted(transposed_seq)
+    perm = tuple(original_seq.index(x) for x in transposed_seq)
+    assert tuple(transposed_seq) == transpose_seq(original_seq, perm)
+    return perm
 
 
 # onnx helpers
@@ -239,7 +245,7 @@ class Transform:
             perm=perm,
         ))
         self.oname = transpose_name
-        self.oshape = transpose_shape(self.oshape, perm)
+        self.oshape = transpose_seq(self.oshape, perm)
         return self
 
     def matmul(self, arg):
@@ -414,8 +420,8 @@ def einsum_reducesum_input(spec, transforms, i):
 def einsum_transpose_input(spec, transforms, i, perm):
     transforms[i].transpose(perm)
     ispec = spec.inputs[i]
-    ispec.idxs = list(transpose_shape(ispec.idxs, perm))
-    ispec.shape = transpose_shape(ispec.shape, perm)
+    ispec.idxs = list(transpose_seq(ispec.idxs, perm))
+    ispec.shape = transpose_seq(ispec.shape, perm)
     assert transforms[i].oshape == ispec.shape
     return spec, transforms
 
@@ -451,12 +457,10 @@ def einsum_mul_inputs(spec, transforms, i, j):
     j_idxs_unshared = [idx for idx in j_idxs if idx not in ij_idxs]
     j_idxs_shared = [idx for idx in i_idxs if idx in ij_idxs]
     j_idxs_transposed = j_idxs_unshared + j_idxs_shared
-    assert sorted(j_idxs_transposed) == sorted(j_idxs)
-    perm = tuple(j_idxs.index(idx) for idx in j_idxs_transposed)
-    assert j_idxs_transposed == list(transpose_shape(j_idxs, perm))
+    perm = transpose_perm(j_idxs, j_idxs_transposed)
     transforms[j].transpose(perm)
     j_ispec.idxs = j_idxs_transposed
-    j_ispec.shape = transpose_shape(j_ispec.shape, perm)
+    j_ispec.shape = transpose_seq(j_ispec.shape, perm)
     assert j_ispec.shape == transforms[j].oshape
 
     # unsqueeze j so ends with all i's idxs, in the same order
