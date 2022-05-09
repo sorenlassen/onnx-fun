@@ -417,10 +417,11 @@ def einsum_reducesum_input(spec, transforms, i):
     ispec.shape = tuple(shape)
     return spec, transforms
 
-def einsum_transpose_input(spec, transforms, i, perm):
-    transforms[i].transpose(perm)
+def einsum_transpose_input(spec, transforms, i, idxs_transposed):
     ispec = spec.inputs[i]
-    ispec.idxs = list(transpose_seq(ispec.idxs, perm))
+    perm = transpose_perm(ispec.idxs, idxs_transposed)
+    transforms[i].transpose(perm)
+    ispec.idxs = idxs_transposed
     ispec.shape = transpose_seq(ispec.shape, perm)
     assert transforms[i].oshape == ispec.shape
     return spec, transforms
@@ -457,11 +458,8 @@ def einsum_mul_inputs(spec, transforms, i, j):
     j_idxs_unshared = [idx for idx in j_idxs if idx not in ij_idxs]
     j_idxs_shared = [idx for idx in i_idxs if idx in ij_idxs]
     j_idxs_transposed = j_idxs_unshared + j_idxs_shared
-    perm = transpose_perm(j_idxs, j_idxs_transposed)
-    transforms[j].transpose(perm)
-    j_ispec.idxs = j_idxs_transposed
-    j_ispec.shape = transpose_seq(j_ispec.shape, perm)
-    assert j_ispec.shape == transforms[j].oshape
+    spec, transforms = einsum_transpose_input(spec, transforms, j, j_idxs_transposed)
+    j_ispec = spec.inputs[j]
 
     # unsqueeze j so ends with all i's idxs, in the same order
     axes = [a for a in range(-len(i_idxs), 0) if i_idxs[a] not in ij_idxs]
