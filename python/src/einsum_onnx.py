@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import List, Tuple, Union
 from copy import copy
-import string
+import math
 import numpy as np
 import onnx # type: ignore
 import onnxruntime # type: ignore
@@ -27,11 +27,11 @@ def einsum_is_identity_spec(spec):
         return False
     if spec.inputs[0].idxs != spec.output.idxs:
         return False
-    assert spec.inputs[0].shape == spec.output.shape
+    assert spec.inputs[0].shape == spec.output.shape, f"{spec}"
     return True
 
 def shape_size(shape):
-    return np.prod(shape)
+    return math.prod(shape)
 
 def squeeze_shape(ishape, axes):
     oshape = list(ishape)
@@ -154,11 +154,28 @@ class Transform:
 
     def model(self, graph_name):
         graph = self.graph(graph_name)
-        #print("GRAPH:",graph)
         return onnx.helper.make_model(graph)
 
     def next_name(self, stem):
         return f"{self.inames[0]}_{stem}_{len(self.nodes)}"
+
+    def reshape(self, shape):
+        # cannot handle -1 dim in shape because we need to know the new oshape
+        assert all(d >= 0 for d in shape), "no support for -1"
+        if shape == self.oshape:
+            return self
+        shape_tensor = np.array(shape, dtype=np.int64)
+        shape_name = self.next_name("shape")
+        self.nodes.append(make_constant_node(shape_name, shape_tensor))
+        reshape_name = self.next_name("reshape")
+        self.nodes.append(onnx.helper.make_node(
+            "Reshape",
+            inputs=[self.oname, shape_name],
+            outputs=[reshape_name],
+        ))
+        self.oname = reshape_name
+        self.oshape = shape
+        return self
 
     def squeeze(self, axes):
         if len(axes) == 0:
@@ -256,7 +273,7 @@ class Transform:
                 "shouldn't raise ValueError: shape mismatch"
             matmul_oshape = \
                 np.broadcast_shapes(self.oshape[:-2], arg.oshape[:-2]) \
-                    + [self.oshape[-2], arg.oshape[-1]]
+                    + (self.oshape[-2], arg.oshape[-1])
         self.inames += arg.inames
         self.ishapes += arg.ishapes
         self.nodes += arg.nodes
@@ -440,12 +457,69 @@ def einsum_contract_inputs(spec, transforms, i, j):
     else:
         return einsum_matmul_inputs(spec, transforms, idxs2reduce, i, j)
 
+# matmul is an optimization of mul followed by reducesum:
+# def einsum_matmul_inputs(spec, transforms, idxs2reduce, i, j):
+#   spec, transforms = einsum_mul_inputs(spec, transforms, i, j)
+#   i -= j < i # j's removal may shift i one position to the left
+#   return einsum_reducesum_input(spec, transforms, i)
+#
 def einsum_matmul_inputs(spec, transforms, idxs2reduce, i, j):
-    # placeholder implementation
-    spec, transforms = einsum_mul_inputs(spec, transforms, i, j)
-    if j < i:
-        i -= 1 # j's removal shifted i one position to the left
-    return einsum_reducesum_input(spec, transforms, i)
+    # We assume that each of i and j have no repeated or reducible indexes.
+    # (Any repeated or reducible indexes in each input were removed in
+    # einsum_diagonalize_input() and einsum_reducesum_input() up front
+    # and einsum_contract_inputs() doesn't produce any repeated or reducible
+    # indexes.)
+    #
+    # Under this assumption the indexes in i and j fall in 4 buckets:
+    # 1. Those that are reducible after or during contraction, namely those
+    #    not in the output or any other remaining inputs. These appear in
+    #    both i and j (as we assume no reducible indexes in each input).
+    # 2. The other indexes that appear in both i and j,
+    # 3. The indexes that appear in i and not in j.
+    # 4. The indexes that appear in j and not in i.
+    #
+    # The indexes in the output of the contraction are the disjoint
+    # union of buckets 2, 3, 4.
+
+    i_ispec = spec.inputs[i]
+    j_ispec = spec.inputs[j]
+    i_idxs = i_ispec.idxs
+    j_idxs = j_ispec.idxs
+    ij_idxs = set(i_idxs) & set(j_idxs)
+    ij_keep_idxs = [idx for idx in i_idxs if idx in ij_idxs - idxs2reduce]
+    ij_reduce_idxs = [idx for idx in i_idxs if idx in idxs2reduce]
+    i_idxs_unshared = [idx for idx in i_idxs if idx not in ij_idxs]
+    j_idxs_unshared = [idx for idx in j_idxs if idx not in ij_idxs]
+
+    i_idxs_transposed = ij_keep_idxs + i_idxs_unshared + ij_reduce_idxs
+    spec, transforms = einsum_transpose_input(spec, transforms, i, i_idxs_transposed)
+    j_idxs_transposed = ij_keep_idxs + ij_reduce_idxs + j_idxs_unshared
+    spec, transforms = einsum_transpose_input(spec, transforms, j, j_idxs_transposed)
+    i_ispec = spec.inputs[i]
+    j_ispec = spec.inputs[j]
+
+    ij_keep_shape = j_ispec.shape[0:len(ij_keep_idxs)]
+    ij_reduce_shape = j_ispec.shape[len(ij_keep_idxs):len(ij_idxs)]
+    j_unshared_shape = j_ispec.shape[len(ij_idxs):]
+    i_unshared_shape = i_ispec.shape[len(ij_keep_idxs):][:len(i_idxs_unshared)]
+    ij_reduce_size = math.prod(ij_reduce_shape)
+    i_unshared_size = math.prod(i_unshared_shape)
+    j_unshared_size = math.prod(j_unshared_shape)
+
+    transforms[i].reshape(ij_keep_shape + (i_unshared_size, ij_reduce_size))
+    assert len(transforms[i].oshape) == len(ij_keep_idxs) + 2
+    transforms[j].reshape(ij_keep_shape + (ij_reduce_size, j_unshared_size))
+    assert len(transforms[j].oshape) == len(ij_keep_idxs) + 2
+    transforms[i].matmul(transforms[j])
+    assert transforms[i].oshape == ij_keep_shape + (i_unshared_size, j_unshared_size)
+    final_shape = ij_keep_shape + i_unshared_shape + j_unshared_shape
+    transforms[i].reshape(final_shape)
+    i_ispec.shape = final_shape
+    i_ispec.idxs = ij_keep_idxs + i_idxs_unshared + j_idxs_unshared
+    assert len(i_ispec.idxs) == len(i_ispec.shape), f"{i_ispec}"
+    del transforms[j]
+    del spec.inputs[j]
+    return spec, transforms
 
 def einsum_mul_inputs(spec, transforms, i, j):
     i_ispec = spec.inputs[i]
@@ -543,6 +617,9 @@ def einsum_decomposed_model_test():
             ("i,i", [(2,),(2,)]),
             ("ij,ij", [(2,3),(2,3)]),
             ("ij,ji", [(2,3),(3,2)]),
+            ("ij,jk", [(2,3),(3,4)]),
+            ("hij,hjk", [(5,2,3),(5,3,4)]),
+            ("ghijk,ghjkm", [(6,5,2,3,3),(6,5,3,3,4)]),
         ]:
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
