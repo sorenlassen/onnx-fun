@@ -375,6 +375,11 @@ def einsum_decomposed_model(equation, ishapes, dtype):
         # axes to juggle in contractions
         spec, transforms = einsum_squeeze_input(spec, transforms, i)
         spec, transforms = einsum_diagonalize_input(spec, transforms, i)
+
+    # einsum_squeeze_input() must be done on all inputs before
+    # einsum_reducesum_input() on any input, because a squeeze of
+    # a later input can enable reducesum of an earlier input
+    for i in range(ninputs):
         spec, transforms = einsum_reducesum_input(spec, transforms, i)
 
     # TODO: optimize the contraction order
@@ -559,7 +564,7 @@ def einsum_finalize(spec, transform):
     ispec = spec.inputs[0]
     in_idxs = set(ispec.idxs)
     out_idxs = spec.output.idxs
-    assert in_idxs.issubset(set(out_idxs))
+    assert in_idxs.issubset(set(out_idxs)), f"{in_idxs},{out_idxs}"
     assert all(idx in in_idxs or spec.idxs_map[idx] == 1 for idx in out_idxs)
     if einsum_is_identity_spec(spec):
         # The equation is the identity transformation.
@@ -620,6 +625,9 @@ def einsum_decomposed_model_test():
             ("ij,jk", [(2,3),(3,4)]),
             ("hij,hjk", [(5,2,3),(5,3,4)]),
             ("ghijk,ghjkm", [(6,5,2,3,3),(6,5,3,3,4)]),
+            ("ghijk,ghjkm,gh", [(6,5,2,3,3),(6,5,3,3,4),(6,5)]),
+            ("ghijk,ghjkm->ghim", [(6,5,2,3,3),(6,5,3,3,4)]),
+            ("ghijk,ghjkm->ghim", [(1,5,2,1,3),(6,1,3,1,4)]),
         ]:
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
