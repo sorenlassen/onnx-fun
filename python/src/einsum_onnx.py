@@ -1,15 +1,93 @@
+from __future__ import annotations
 from dataclasses import dataclass
-from typing import List, Tuple, Union
-from copy import copy
+from typing import List, Tuple, Union, Any, TYPE_CHECKING
 import math
 import numpy as np
 import onnx # type: ignore
 import onnxruntime # type: ignore
 import einsum # type: ignore
+import onnx.shape_inference
 
+if TYPE_CHECKING:
+    class OnnxDim:
+        dim_value: int
+    class OnnxShape:
+        dim: List[OnnxDim]
+    class OnnxTensorType:
+        elem_type: int
+        shape: OnnxShape
+    class OnnxType:
+        tensor_type: OnnxTensorType
+    class OnnxValueInfo:
+        name: str
+        type: OnnxType
+    class OnnxSegment:
+        begin: int
+        end: int
+    class OnnxTensor:
+        dims: List[OnnxDim]
+        data_type: int
+        double_data: List[float]
+        external_data: Any
+        float_data: List[float]
+        int32_data: List[int]
+        int64_data: List[int]
+        name: str
+        raw_data: Any
+        string_data: str
+        uint64_data: List[int]
+        segment: OnnxSegment
+    class OnnxSparseTensor(OnnxTensor):
+        pass
+    class OnnxAttribute:
+        name: str
+        f: float
+        floats: List[float]
+        g: OnnxGraph
+        graphs: List[OnnxGraph]
+        i: int
+        ints: List[int]
+        ref_attr_name: str
+        s: bytes
+        strings: List[bytes]
+        sparse_tensor: OnnxSparseTensor
+        sparse_tensors: List[OnnxSparseTensor]
+        t: OnnxTensor
+        tensors: List[OnnxTensor]
+        type: onnx.TensorProto
+        type_protos: List[onnx.TensorProto]
+    class OnnxNode:
+        attribute: List[OnnxAttribute]
+        domain: str
+        doc_string: str
+        input: List[str]
+        name: str
+        op_type: str
+        output: List[str]
+    class OnnxGraph:
+        doc_string: str
+        name: str
+        input: List[OnnxValueInfo]
+        output: List[OnnxValueInfo]
+        node: List[OnnxNode]
+        value_info: List[OnnxValueInfo]
+    class OnnxOperatorId:
+        version: int
+    class OnnxModel:
+        doc_string: str
+        domain: str
+        functions: List[Any]
+        graph: OnnxGraph
+        ir_version: int
+        metadata_props: List[Any]
+        model_version: int
+        opset_import: List[OnnxOperatorId]
+        producer_name: str
+        producer_version: str
+        training_info: List[Any]
 
 # list/tuple helpers
-def nonneg(pos, length):
+def nonneg(pos, length: int):
     if isinstance(pos, int):
         assert -length <= pos < length
         return pos if pos >= 0 else pos + length
@@ -22,7 +100,7 @@ def omit(seq, *positions):
 
 
 # EinsumSpec helpers
-def einsum_is_identity_spec(spec):
+def einsum_is_identity_spec(spec: einsum.EinsumSpec):
     if len(spec.inputs) != 1:
         return False
     if spec.inputs[0].idxs != spec.output.idxs:
@@ -30,7 +108,7 @@ def einsum_is_identity_spec(spec):
     assert spec.inputs[0].shape == spec.output.shape, f"{spec}"
     return True
 
-def shape_size(shape):
+def shape_size(shape) -> int:
     return math.prod(shape)
 
 def squeeze_shape(ishape, axes):
@@ -56,7 +134,7 @@ def transpose_perm(original_seq, transposed_seq):
 
 
 # onnx helpers
-def onnx_type(dtype):
+def onnx_type(dtype) -> onnx.TensorProto:
     '''Returns equivalent onnx.TensorProto basetype for a given numpy type
     where dtype can be either a numpy dtype or np.float32, np.int64, etc.'''
     if isinstance(dtype, np.dtype): dtype = dtype.type
@@ -67,13 +145,13 @@ def onnx_type(dtype):
         np.int64: onnx.TensorProto.INT64,
     }[dtype]
 
-def param(param_name, dtype, shape):
+def param(param_name, dtype, shape) -> OnnxValueInfo:
     return onnx.helper.make_tensor_value_info(
         param_name,
         onnx_type(dtype),
         shape)
 
-def make_constant_node(output_name, tensor):
+def make_constant_node(output_name, tensor) -> OnnxNode:
     tensor = np.asarray(tensor)
     return onnx.helper.make_node(
         "Constant",
@@ -87,7 +165,7 @@ def make_constant_node(output_name, tensor):
         ),
     )
 
-def make_constant_model(graph_name, output_name, tensor):
+def make_constant_model(graph_name, output_name, tensor) -> OnnxModel:
     constant_node = make_constant_node(output_name, tensor)
     return onnx.helper.make_model(
         graph=onnx.helper.make_graph(
@@ -98,14 +176,14 @@ def make_constant_model(graph_name, output_name, tensor):
         )
     )
 
-def make_identity_node(input_name, output_name):
+def make_identity_node(input_name, output_name) -> OnnxNode:
     return onnx.helper.make_node(
         "Identity",
         inputs=[input_name],
         outputs=[output_name],
     )
 
-def run_model(model, *inputs):
+def run_model(model: OnnxModel, *inputs):
     sess = onnxruntime.InferenceSession(model.SerializeToString())
     def names(params): return map(lambda param: param.name, params)
     # model might omit an input, e.g. when result is just a constant
@@ -114,7 +192,7 @@ def run_model(model, *inputs):
     output_names = list(names(model.graph.output))
     return sess.run(output_names, inputs_dict)
 
-def infer_shapes_and_run_model(model, *inputs):
+def infer_shapes_and_run_model(model: OnnxModel, *inputs):
     model = onnx.shape_inference.infer_shapes(model)
     onnx.checker.check_model(model)
     return run_model(model, *inputs)
@@ -129,9 +207,9 @@ class Transform:
     dtype: Union[np.dtype, type] # e.g. np.type(np.int32) or np.int32
     oname: str
     oshape: Tuple[int, ...]
-    nodes: List[onnx.onnx_ml_pb2.NodeProto]
+    nodes: List[OnnxNode]
 
-    def graph(self, graph_name):
+    def graph(self, graph_name) -> OnnxGraph:
         assert len(self.inames) == len(self.ishapes)
         if len(self.nodes) == 0:
             # Empty graphs don't come compose with onnx.compose, so
@@ -152,7 +230,7 @@ class Transform:
             outputs=[param(final_oname, self.dtype, self.oshape)],
         )
 
-    def model(self, graph_name):
+    def model(self, graph_name) -> OnnxModel:
         graph = self.graph(graph_name)
         return onnx.helper.make_model(graph)
 
@@ -306,7 +384,7 @@ def make_identity_transform(dtype, shape, iname):
     return Transform([iname], [shape], dtype, iname, shape, [])
 
 
-def einsum_direct_model(equation, ishapes, dtype):
+def einsum_direct_model(equation, ishapes, dtype) -> OnnxModel:
     spec = einsum.einsum_spec(equation, ishapes)
     oshape = spec.output.shape
     input_names = [f"x{i}" for i in range(len(ishapes))]
@@ -389,7 +467,7 @@ def einsum_decomposed_model(equation, ishapes, dtype):
     transform = einsum_finalize(spec, transforms[0])
     return transform.model(f"einsum({equation})")
 
-def einsum_squeeze_input(spec, transforms, i):
+def einsum_squeeze_input(spec: einsum.EinsumSpec, transforms: List[Transform], i):
     ispec = spec.inputs[i]
     idxs = list(ispec.idxs)
     shape = list(ispec.shape)
@@ -403,7 +481,7 @@ def einsum_squeeze_input(spec, transforms, i):
     ispec.shape = tuple(shape)
     return spec, transforms
 
-def einsum_diagonalize_input(spec, transforms, i):
+def einsum_diagonalize_input(spec: einsum.EinsumSpec, transforms: List[Transform], i):
     ispec = spec.inputs[i]
     idxs = list(ispec.idxs)
     shape = list(ispec.shape)
@@ -419,7 +497,7 @@ def einsum_diagonalize_input(spec, transforms, i):
     ispec.shape = tuple(shape)
     return spec, transforms
 
-def einsum_reducesum_input(spec, transforms, i):
+def einsum_reducesum_input(spec: einsum.EinsumSpec, transforms: List[Transform], i):
     ispec = spec.inputs[i]
     idxs = list(ispec.idxs)
     shape = list(ispec.shape)
@@ -439,7 +517,7 @@ def einsum_reducesum_input(spec, transforms, i):
     ispec.shape = tuple(shape)
     return spec, transforms
 
-def einsum_transpose_input(spec, transforms, i, idxs_transposed):
+def einsum_transpose_input(spec: einsum.EinsumSpec, transforms: List[Transform], i, idxs_transposed):
     ispec = spec.inputs[i]
     perm = transpose_perm(ispec.idxs, idxs_transposed)
     transforms[i].transpose(perm)
@@ -448,7 +526,7 @@ def einsum_transpose_input(spec, transforms, i, idxs_transposed):
     assert transforms[i].oshape == ispec.shape
     return spec, transforms
 
-def einsum_contract_inputs(spec, transforms, i, j):
+def einsum_contract_inputs(spec: einsum.EinsumSpec, transforms: List[Transform], i, j):
     i_ispec = spec.inputs[i]
     j_ispec = spec.inputs[j]
     ij_idxs = set(i_ispec.idxs) & set(j_ispec.idxs)
@@ -468,7 +546,7 @@ def einsum_contract_inputs(spec, transforms, i, j):
 #   i -= j < i # j's removal may shift i one position to the left
 #   return einsum_reducesum_input(spec, transforms, i)
 #
-def einsum_matmul_inputs(spec, transforms, idxs2reduce, i, j):
+def einsum_matmul_inputs(spec: einsum.EinsumSpec, transforms: List[Transform], idxs2reduce, i, j):
     # We assume that each of i and j have no repeated or reducible indexes.
     # (Any repeated or reducible indexes in each input were removed in
     # einsum_diagonalize_input() and einsum_reducesum_input() up front
@@ -526,7 +604,7 @@ def einsum_matmul_inputs(spec, transforms, idxs2reduce, i, j):
     del spec.inputs[j]
     return spec, transforms
 
-def einsum_mul_inputs(spec, transforms, i, j):
+def einsum_mul_inputs(spec: einsum.EinsumSpec, transforms: List[Transform], i, j):
     i_ispec = spec.inputs[i]
     j_ispec = spec.inputs[j]
     i_idxs = i_ispec.idxs
@@ -559,7 +637,7 @@ def einsum_mul_inputs(spec, transforms, i, j):
     del spec.inputs[j]
     return spec, transforms
 
-def einsum_finalize(spec, transform):
+def einsum_finalize(spec: einsum.EinsumSpec, transform: Transform):
     assert len(spec.inputs) == 1
     ispec = spec.inputs[0]
     in_idxs = set(ispec.idxs)
@@ -578,6 +656,7 @@ def einsum_finalize(spec, transform):
 
 def einsum_decomposed_model_test():
     print("einsum_decomposed_model_test() start")
+    counter = 0
 
     for equation, ishapes in [
             ("ii->i", [(0,0)]),
@@ -632,11 +711,31 @@ def einsum_decomposed_model_test():
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
         model = einsum_decomposed_model(equation, ishapes, np.float64)
+        name = equation.replace(',', '_comma_').replace('->', '_arrow_').replace(' ', '').replace('...', '_ellipses_')
+        path = f"output/out%03d_{name}.py" % counter
+        counter += 1
+        print(equation, ishapes, path)
+        try:
+            import onnxconverter_common.onnx2py
+            import os
+            try:
+                os.mkdir("output")
+            except OSError:
+                pass
+            model_trace = onnxconverter_common.onnx2py.convert(model, path)
+            py_obj = onnxconverter_common.onnx2py.TracingObject.get_py_obj(model_trace)
+            print(repr(model_trace))
+            needs_install = False
+        except ImportError:
+            needs_install = True
         [actual] = infer_shapes_and_run_model(model, *inputs)
         assert expected.shape == actual.shape
         np.testing.assert_almost_equal(expected, actual)
 
     print("einsum_decomposed_model_test() end")
+    if needs_install:
+        print("")
+        print("Try `pip3 install onnxconverter-common` before running these tests to see the decomposed python code for each einsum equation")
 
 if __name__ == "__main__":
    einsum_direct_model_test()
