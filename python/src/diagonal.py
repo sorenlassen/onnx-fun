@@ -255,6 +255,62 @@ def diagonal_by_gather_elements(dtype, ishape, offset=0, axis1=0, axis2=1):
             io_map=[(slice_output.name, diag_input.name)]
             )
 
+# Implements np.diagonal with Identity Matrix, Mul, ReduceSum.
+def diagonal_by_id_mul_reduce(dtype, ishape, offset=0, axis1=0, axis2=1):
+    axis1, axis2, oshape = diagonal_check_arguments(ishape, offset, axis1, axis2)
+    if np.prod(oshape) == 0: # optimization
+        return make_empty_model("diagonal_empty", "empty", dtype, oshape)
+    slice_model = diagonal_slice(dtype, ishape, offset, axis1, axis2)
+    odim = oshape[-1]
+    sliced_shape = mutate_shape(ishape, {axis1: odim, axis2: odim})
+    axis1, axis2 = sorted([axis1, axis2])
+
+    id_matrix = make_constant_node("id_matrix", np.eye(odim, dtype=dtype))
+
+    indices_shape = sliced_shape[:axis1] + (1,) + sliced_shape[axis1 + 1:]
+    arange = np.arange(odim)
+    # same as arange.reshape((odim,) + (1,) * (len(sliced_shape) - 1 - axis2))
+    unsqueezed = np.expand_dims(arange, tuple(range(1, len(sliced_shape) - axis2)))
+    indices = np.broadcast_to(unsqueezed, indices_shape)
+    indices_node = make_constant_node("indices", indices)
+    # TODO: to optimize, if odim is 1, Reshape instead of GatherElements+Squeeze
+    gather_elements_node = onnx.helper.make_node(
+            "GatherElements",
+            inputs=["data", "indices"],
+            outputs=["gathered"],
+            axis=axis1)
+    squeeze_axes_node = make_constant_node("squeeze_axes", np.array([axis1]))
+    squeeze_node = onnx.helper.make_node(
+            "Squeeze",
+            inputs=["gathered", "squeeze_axes"],
+            outputs=["squeezed"])
+    nodes = [indices_node, gather_elements_node, squeeze_axes_node, squeeze_node]
+    if axis2 == len(sliced_shape) - 1:
+        output_name = "squeezed"
+    else:
+        perm = perm_from_dict(len(oshape), {axis1: -1})
+        transpose_node = onnx.helper.make_node(
+                "Transpose",
+                inputs=["squeezed"],
+                outputs=["transposed"],
+                perm=perm)
+        nodes.append(transpose_node)
+        output_name = "transposed"
+    diag_model = onnx.helper.make_model(
+            graph=onnx.helper.make_graph(
+                name='diagonal_by_gather_elements',
+                nodes=nodes,
+                inputs=[param("data", dtype, sliced_shape)],
+                outputs=[param(output_name, dtype, oshape)],
+                )
+            )
+    [slice_output] = slice_model.graph.output
+    [diag_input] = diag_model.graph.input
+    return onnx.compose.merge_models(
+            slice_model, diag_model,
+            io_map=[(slice_output.name, diag_input.name)]
+            )
+
 def diagonal_test():
     print("diagonal_test() start")
 

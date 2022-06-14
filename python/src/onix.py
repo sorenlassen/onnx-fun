@@ -11,6 +11,9 @@ def onnx_type(dtype):
         np.float64: onnx.TensorProto.DOUBLE,
         np.int32: onnx.TensorProto.INT32,
         np.int64: onnx.TensorProto.INT64,
+        np.longlong: onnx.TensorProto.INT64,
+        np.bool_: onnx.TensorProto.BOOL,
+        bool: onnx.TensorProto.BOOL,
     }[dtype]
 
 def param(param_name, dtype, shape):
