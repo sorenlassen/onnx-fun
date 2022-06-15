@@ -6,7 +6,7 @@ import numpy as np
 import onnx # type: ignore
 import onnxruntime # type: ignore
 import einsum # type: ignore
-import onnx.shape_inference
+import onnx.shape_inference # type: ignore
 
 if TYPE_CHECKING:
     class OnnxDim:
@@ -85,6 +85,8 @@ if TYPE_CHECKING:
         producer_name: str
         producer_version: str
         training_info: List[Any]
+        def SerializeToString(self) -> str:
+            ...
 
 # list/tuple helpers
 def nonneg(pos, length: int):
@@ -716,7 +718,7 @@ def einsum_decomposed_model_test():
         counter += 1
         print(equation, ishapes, path)
         try:
-            import onnxconverter_common.onnx2py
+            import onnxconverter_common.onnx2py # type: ignore
             import os
             try:
                 os.mkdir("output")
