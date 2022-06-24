@@ -166,15 +166,12 @@ def make_constant_node(output_name, tensor) -> OnnxNode:
         ),
     )
 
-def make_constant_model(graph_name, output_name, tensor) -> OnnxModel:
-    constant_node = make_constant_node(output_name, tensor)
-    return onnx.helper.make_model(
-        graph=onnx.helper.make_graph(
-            name=graph_name,
-            nodes=[constant_node],
-            inputs=[],
-            outputs=[param(output_name, tensor.dtype, tensor.shape)],
-        )
+def make_typed_graph(graph_name, nodes, inputs, outputs, dtype) -> OnnxGraph:
+    return onnx.helper.make_graph(
+        name=graph_name,
+        nodes=nodes,
+        inputs=[param(name, dtype, shape) for name, shape in inputs],
+        outputs=[param(name, dtype, shape) for name, shape in outputs],
     )
 
 def run_model(model: OnnxModel, *inputs):
@@ -190,7 +187,6 @@ def infer_shapes_and_run_model(model: OnnxModel, *inputs):
     model = onnx.shape_inference.infer_shapes(model)
     onnx.checker.check_model(model)
     return run_model(model, *inputs)
-
 
 
 class Transform:
@@ -216,15 +212,9 @@ class Transform:
             # we insert an Identity node for robustness.
             self.identity()
             assert len(self.nodes) == 1
-        return onnx.helper.make_graph(
-            name=graph_name,
-            nodes=self.nodes,
-            inputs=[
-                param(iname, self.dtype, ishape)
-                    for iname, ishape in sorted(self.inputs.items())
-            ],
-            outputs=[param(self.oname, self.dtype, self.oshape)],
-        )
+        graph_inputs = sorted(self.inputs.items())
+        graph_outputs = [(self.oname, self.oshape)]
+        return make_typed_graph(graph_name, self.nodes, graph_inputs, graph_outputs, self.dtype)
 
     def model(self, graph_name) -> OnnxModel:
         graph = self.graph(graph_name)
@@ -425,6 +415,10 @@ def einsum_direct_model_test():
 
 
 def einsum_decomposed_model(equation, ishapes, dtype):
+    ninputs = len(ishapes)
+    assert ninputs <= 100 # for convenience to keep input names short
+    in_name = lambda i: "in%02d" % i # sortable names for i < 100
+
     spec = einsum.einsum_spec(equation, ishapes)
 
     # In two cases the output is just zeros or empty:
@@ -435,14 +429,17 @@ def einsum_decomposed_model(equation, ishapes, dtype):
     oshape = spec.output.shape
     if any(shape_size(shape) == 0 for shape in ishapes + [oshape]):
         tensor = np.zeros(oshape, dtype=dtype)
-        return make_constant_model('einsum_constant', "out", tensor)
+        out_name = "out"
+        nodes = [make_constant_node(out_name, tensor)]
+        inputs = [(in_name(i), ishapes[i]) for i in range(ninputs)]
+        outputs = [(out_name, oshape)]
+        return onnx.helper.make_model(
+            make_typed_graph("einsum_constant", nodes, inputs, outputs, dtype)
+        )
 
     # Each transform is either an onnx model transforming the input
     # at that position or just a string with the name of the input
     # which represents the identity transformation.
-    ninputs = len(ishapes)
-    assert ninputs <= 100 # for convenience to keep input names short
-    in_name = lambda i: "in%02d" % i # sortable names for i < 100
     transforms = [
         Transform(in_name(i), ishapes[i], dtype)
         for i in range(ninputs)
