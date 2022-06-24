@@ -1,5 +1,4 @@
 from __future__ import annotations
-from dataclasses import dataclass
 from typing import List, Tuple, Union, Any, TYPE_CHECKING
 import math
 import numpy as np
@@ -202,7 +201,6 @@ def infer_shapes_and_run_model(model: OnnxModel, *inputs):
 
 Shape = Tuple[int, ...]
 
-@dataclass
 class Transform:
     inames: List[str]
     ishapes: List[Shape]
@@ -210,6 +208,15 @@ class Transform:
     oname: str
     oshape: Tuple[int, ...]
     nodes: List[OnnxNode]
+
+    def __init__(self, dtype, shape, iname):
+        '''The identity transform from one input to the same output.'''
+        self.inames = [iname]
+        self.ishapes = [shape]
+        self.dtype = dtype
+        self.oname = iname
+        self.oshape = shape
+        self.nodes = []
 
     def graph(self, graph_name) -> OnnxGraph:
         assert len(self.inames) == len(self.ishapes)
@@ -382,9 +389,6 @@ class Transform:
         self.oshape = mul_shape
         return self
 
-def make_identity_transform(dtype, shape, iname):
-    return Transform([iname], [shape], dtype, iname, shape, [])
-
 
 def einsum_direct_model(equation, ishapes, dtype) -> OnnxModel:
     spec = einsum.einsum_spec(equation, ishapes)
@@ -445,7 +449,7 @@ def einsum_decomposed_model(equation, ishapes, dtype):
     assert ninputs <= 100 # for convenience to keep input names short
     in_name = lambda i: "in%02d" % i # sortable names for i < 100
     transforms = [
-        make_identity_transform(dtype, ishapes[i], in_name(i))
+        Transform(dtype, ishapes[i], in_name(i))
         for i in range(ninputs)
     ]
 
