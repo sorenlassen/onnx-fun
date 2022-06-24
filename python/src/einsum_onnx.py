@@ -206,7 +206,7 @@ class Transform:
         self.oshape = shape
         self.nodes = []
 
-    def graph(self, graph_name) -> OnnxGraph:
+    def graph(self, graph_name: str) -> OnnxGraph:
         if len(self.nodes) == 0:
             # Empty graphs don't compose with onnx.compose, so
             # we insert an Identity node for robustness.
@@ -216,11 +216,11 @@ class Transform:
         graph_outputs = [(self.oname, self.oshape)]
         return make_typed_graph(graph_name, self.nodes, graph_inputs, graph_outputs, self.dtype)
 
-    def model(self, graph_name) -> OnnxModel:
+    def model(self, graph_name: str) -> OnnxModel:
         graph = self.graph(graph_name)
         return onnx.helper.make_model(graph)
 
-    def next_name(self, stem):
+    def next_name(self, stem: str):
         return f"{self.name}_{stem}_{len(self.nodes)}"
 
     def identity(self):
@@ -233,7 +233,7 @@ class Transform:
         self.oname = identity_name
         return self
 
-    def reshape(self, shape):
+    def reshape(self, shape: Shape):
         # cannot handle -1 dim in shape because we need to know the new oshape
         assert all(d >= 0 for d in shape), "no support for -1"
         if shape == self.oshape:
@@ -251,7 +251,7 @@ class Transform:
         self.oshape = shape
         return self
 
-    def squeeze(self, axes):
+    def squeeze(self, axes: List[int]):
         if len(axes) == 0:
             return self
         axes_tensor = np.array(axes, dtype=np.int64)
@@ -267,7 +267,7 @@ class Transform:
         self.oshape = squeeze_shape(self.oshape, axes)
         return self
 
-    def unsqueeze(self, axes):
+    def unsqueeze(self, axes: List[int]):
         if len(axes) == 0:
             return self
         axes_tensor = np.array(axes, dtype=np.int64)
@@ -283,7 +283,7 @@ class Transform:
         self.oshape = unsqueeze_shape(self.oshape, axes)
         return self
 
-    def diagonalize(self, axis1, axis2):
+    def diagonalize(self, axis1: int, axis2: int):
         assert 0 <= axis1 < axis2 < len(self.oshape)
         dim = self.oshape[axis1]
         assert dim == self.oshape[axis2]
@@ -306,7 +306,7 @@ class Transform:
             self.oshape = indices_shape
         return self.squeeze([axis1])
 
-    def reducesum(self, axes):
+    def reducesum(self, axes: List[int]):
         if len(axes) == 0:
             return self
         axes_tensor = np.array(axes, dtype=np.int64)
@@ -323,7 +323,7 @@ class Transform:
         self.oshape = squeeze_shape(self.oshape, axes)
         return self
 
-    def transpose(self, perm):
+    def transpose(self, perm: Tuple[int, ...]):
         assert sorted(perm) == list(range(len(perm)))
         assert len(perm) == len(self.oshape)
         if tuple(perm) == tuple(range(len(self.oshape))):
@@ -339,7 +339,7 @@ class Transform:
         self.oshape = transpose_seq(self.oshape, perm)
         return self
 
-    def matmul(self, arg):
+    def matmul(self, arg: Transform):
         if len(self.oshape) == 1 or len(arg.oshape) == 1:
             matmul_oshape = np.broadcast_shapes(self.oshape, arg.oshape)[:-1]
         else:
@@ -360,7 +360,7 @@ class Transform:
         self.oshape = matmul_oshape
         return self
 
-    def mul(self, arg):
+    def mul(self, arg: Transform):
         mul_shape = np.broadcast_shapes(self.oshape, arg.oshape)
         self.inputs.update(arg.inputs)
         self.nodes += arg.nodes
