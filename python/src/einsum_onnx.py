@@ -221,7 +221,7 @@ class Transform:
     def graph(self, graph_name) -> OnnxGraph:
         assert len(self.inames) == len(self.ishapes)
         if len(self.nodes) == 0:
-            # Empty graphs don't come compose with onnx.compose, so
+            # Empty graphs don't compose with onnx.compose, so
             # we insert an Identity node for robustness.
             assert len(self.inames) == 1
             final_oname = f"{graph_name}_out"
