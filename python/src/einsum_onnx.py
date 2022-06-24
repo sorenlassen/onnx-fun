@@ -5,7 +5,7 @@ import numpy as np
 import onnx # type: ignore
 import onnxruntime # type: ignore
 import einsum # type: ignore
-import onnx.shape_inference # type: ignore
+#import onnx.shape_inference # type: ignore
 
 if TYPE_CHECKING:
     class OnnxDim:
