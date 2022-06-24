@@ -1,13 +1,13 @@
 from __future__ import annotations
-from typing import List, Tuple, Union, Any, TYPE_CHECKING
+from typing import Dict, List, Tuple, Union, Any, TYPE_CHECKING
 import math
 import numpy as np
 import onnx # type: ignore
 import onnxruntime # type: ignore
 import einsum # type: ignore
-#import onnx.shape_inference # type: ignore
 
 if TYPE_CHECKING:
+    Shape = Tuple[int, ...]
     class OnnxDim:
         dim_value: int
     class OnnxShape:
@@ -177,13 +177,6 @@ def make_constant_model(graph_name, output_name, tensor) -> OnnxModel:
         )
     )
 
-def make_identity_node(input_name, output_name) -> OnnxNode:
-    return onnx.helper.make_node(
-        "Identity",
-        inputs=[input_name],
-        outputs=[output_name],
-    )
-
 def run_model(model: OnnxModel, *inputs):
     sess = onnxruntime.InferenceSession(model.SerializeToString())
     def names(params): return map(lambda param: param.name, params)
@@ -199,44 +192,38 @@ def infer_shapes_and_run_model(model: OnnxModel, *inputs):
     return run_model(model, *inputs)
 
 
-Shape = Tuple[int, ...]
 
 class Transform:
-    inames: List[str]
-    ishapes: List[Shape]
+    name: str
     dtype: Union[np.dtype, type] # e.g. np.type(np.int32) or np.int32
+    inputs: Dict[str, Shape] # maps input names to shapes
     oname: str
-    oshape: Tuple[int, ...]
+    oshape: Shape
     nodes: List[OnnxNode]
 
-    def __init__(self, dtype, shape, iname):
+    def __init__(self, name, shape, dtype):
         '''The identity transform from one input to the same output.'''
-        self.inames = [iname]
-        self.ishapes = [shape]
+        self.name = name
         self.dtype = dtype
-        self.oname = iname
+        self.inputs = {name: shape}
+        self.oname = name
         self.oshape = shape
         self.nodes = []
 
     def graph(self, graph_name) -> OnnxGraph:
-        assert len(self.inames) == len(self.ishapes)
         if len(self.nodes) == 0:
             # Empty graphs don't compose with onnx.compose, so
             # we insert an Identity node for robustness.
-            assert len(self.inames) == 1
-            final_oname = f"{graph_name}_out"
-            final_nodes = [make_identity_node(self.inames[0], final_oname)]
-        else:
-            final_oname = self.oname
-            final_nodes = self.nodes
+            self.identity()
+            assert len(self.nodes) == 1
         return onnx.helper.make_graph(
             name=graph_name,
-            nodes=final_nodes,
+            nodes=self.nodes,
             inputs=[
                 param(iname, self.dtype, ishape)
-                    for iname, ishape in sorted(zip(self.inames, self.ishapes))
+                    for iname, ishape in sorted(self.inputs.items())
             ],
-            outputs=[param(final_oname, self.dtype, self.oshape)],
+            outputs=[param(self.oname, self.dtype, self.oshape)],
         )
 
     def model(self, graph_name) -> OnnxModel:
@@ -244,7 +231,17 @@ class Transform:
         return onnx.helper.make_model(graph)
 
     def next_name(self, stem):
-        return f"{self.inames[0]}_{stem}_{len(self.nodes)}"
+        return f"{self.name}_{stem}_{len(self.nodes)}"
+
+    def identity(self):
+        identity_name = self.next_name("identity")
+        self.nodes.append(onnx.helper.make_node(
+            "Identity",
+            inputs=[self.oname],
+            outputs=[identity_name],
+        ))
+        self.oname = identity_name
+        return self
 
     def reshape(self, shape):
         # cannot handle -1 dim in shape because we need to know the new oshape
@@ -361,8 +358,7 @@ class Transform:
             matmul_oshape = \
                 np.broadcast_shapes(self.oshape[:-2], arg.oshape[:-2]) \
                     + (self.oshape[-2], arg.oshape[-1])
-        self.inames += arg.inames
-        self.ishapes += arg.ishapes
+        self.inputs.update(arg.inputs)
         self.nodes += arg.nodes
         matmul_name = self.next_name("matmul")
         self.nodes.append(onnx.helper.make_node(
@@ -376,8 +372,7 @@ class Transform:
 
     def mul(self, arg):
         mul_shape = np.broadcast_shapes(self.oshape, arg.oshape)
-        self.inames += arg.inames
-        self.ishapes += arg.ishapes
+        self.inputs.update(arg.inputs)
         self.nodes += arg.nodes
         mul_name = self.next_name("mul")
         self.nodes.append(onnx.helper.make_node(
@@ -449,7 +444,7 @@ def einsum_decomposed_model(equation, ishapes, dtype):
     assert ninputs <= 100 # for convenience to keep input names short
     in_name = lambda i: "in%02d" % i # sortable names for i < 100
     transforms = [
-        Transform(dtype, ishapes[i], in_name(i))
+        Transform(in_name(i), ishapes[i], dtype)
         for i in range(ninputs)
     ]
 
