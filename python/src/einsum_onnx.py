@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Dict, List, Tuple, Union, Any, TYPE_CHECKING
+import os
 import math
 import numpy as np
 import onnx # type: ignore
@@ -647,9 +648,41 @@ def einsum_finalize(spec: einsum.EinsumSpec, transform: Transform):
     return transform.unsqueeze(axes)
 
 
+class Printer:
+    verbosity: int
+    counter: int
+    printed_install_message: bool
+
+    def __init__(self):
+        self.verbosity = int(os.getenv("EINSUM_VERBOSE", "1"))
+        self.counter = 0
+        self.printed_install_message = False
+
+    def print(self, equation, ishapes, model):
+        if self.verbosity < 1:
+            return
+        name = equation.replace(',', '_comma_').replace('->', '_arrow_').replace(' ', '').replace('...', '_ellipses_')
+        path = f"output/out%03d_{name}.py" % self.counter
+        self.counter += 1
+        print(equation, ishapes, path)
+        try:
+            import onnxconverter_common.onnx2py # type: ignore
+            try:
+                os.mkdir("output")
+            except OSError:
+                pass
+            model_trace = onnxconverter_common.onnx2py.convert(model, path)
+            py_obj = onnxconverter_common.onnx2py.TracingObject.get_py_obj(model_trace)
+            print(repr(model_trace))
+        except ImportError:
+            if not self.printed_install_message:
+                print("")
+                print("Try `pip3 install onnxconverter-common` before running these tests to see the decomposed python code for each einsum equation")
+                self.printed_install_message = True
+
 def einsum_decomposed_model_test():
     print("einsum_decomposed_model_test() start")
-    counter = 0
+    printer = Printer()
 
     for equation, ishapes in [
             ("ii->i", [(0,0)]),
@@ -704,31 +737,12 @@ def einsum_decomposed_model_test():
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
         model = einsum_decomposed_model(equation, ishapes, np.float64)
-        name = equation.replace(',', '_comma_').replace('->', '_arrow_').replace(' ', '').replace('...', '_ellipses_')
-        path = f"output/out%03d_{name}.py" % counter
-        counter += 1
-        print(equation, ishapes, path)
-        try:
-            import onnxconverter_common.onnx2py # type: ignore
-            import os
-            try:
-                os.mkdir("output")
-            except OSError:
-                pass
-            model_trace = onnxconverter_common.onnx2py.convert(model, path)
-            py_obj = onnxconverter_common.onnx2py.TracingObject.get_py_obj(model_trace)
-            print(repr(model_trace))
-            needs_install = False
-        except ImportError:
-            needs_install = True
+        printer.print(equation, ishapes, model)
         [actual] = infer_shapes_and_run_model(model, *inputs)
         assert expected.shape == actual.shape
         np.testing.assert_almost_equal(expected, actual)
 
     print("einsum_decomposed_model_test() end")
-    if needs_install:
-        print("")
-        print("Try `pip3 install onnxconverter-common` before running these tests to see the decomposed python code for each einsum equation")
 
 if __name__ == "__main__":
    einsum_direct_model_test()

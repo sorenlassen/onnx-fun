@@ -11,6 +11,8 @@ python3 -i python/src/einsum_onnx.py # runs self test and takes you to python3 r
 >>> np.allclose(result,np.einsum("bij,bjk",r234,r245) # prints True
 ```
 
+Silence the verbose test output by setting environment varable `EINSUM_VERBOSE=0`.
+
 Type check with:
 ```bash
 python3 -m mypy python/src/einsum_onnx.py
