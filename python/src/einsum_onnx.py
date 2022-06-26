@@ -654,7 +654,7 @@ class Printer:
     printed_install_message: bool
 
     def __init__(self):
-        self.verbosity = int(os.getenv("EINSUM_VERBOSE", "1"))
+        self.verbosity = int(os.getenv("EINSUM_VERBOSE", "0"))
         self.counter = 0
         self.printed_install_message = False
 
