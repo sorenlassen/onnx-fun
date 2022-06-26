@@ -140,6 +140,11 @@ class Einsummer:
             # TODO: add node to ReduceSum and set output.name to node's output
             output.deleteAxes(axes)
 
+    def transform(self) -> None:
+        for output in self.outputs:
+            self.diagonalize(output)
+            self.reduceSum(output)
+
 def einsummer_test():
     print("einsummer_test() start")
     in1 = EinsumParam("in1", EinsumSubscripts("a...ij"), (2,1,2,3,3,2))
@@ -147,12 +152,7 @@ def einsummer_test():
     in3 = EinsumParam("in3", EinsumSubscripts("xyzx...xwx"), (2,2,1,1,1,2,2))
     res = EinsumParam("res", EinsumSubscripts("ik"), (3,4))
     ein = Einsummer([in1, in2, in3], res, DType(np.float32))
-    ein.diagonalize(ein.outputs[0])
-    ein.reduceSum(ein.outputs[0])
-    ein.diagonalize(ein.outputs[1])
-    ein.reduceSum(ein.outputs[1])
-    ein.diagonalize(ein.outputs[2])
-    ein.reduceSum(ein.outputs[2])
+    ein.transform()
     if VERBOSE: print("ein:",ein)
     print("einsummer_test() end")
 
