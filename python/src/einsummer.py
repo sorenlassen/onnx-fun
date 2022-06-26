@@ -14,6 +14,8 @@ OnnxNode = Any # TODO: describe OnnxNode type better
 
 
 VERBOSE = int(os.getenv("EINSUM_VERBOSE", "0")) > 0
+def log(*args):
+    if VERBOSE: print(*args)
 
 
 EINSUM_ELLIPSIS = "..."
@@ -58,7 +60,7 @@ class EinsumSubscripts:
         self.ellipsisPos = len(front)
         self.ellipsisEnd = len(self.subscriptsList) - len(tail)
         assert (self.ellipsisEnd - self.ellipsisPos) == (1 if ellipsis else 0)
-        self.histogram = EinsumHistogram(list(letters))
+        self.histogram = EinsumHistogram(letters)
 
     def __delitem__(self, axis: int) -> None:
         assert (0 <= axis < self.ellipsisPos) or \
@@ -124,7 +126,7 @@ class Einsummer:
             while output.subscripts.histogram[letter] > 1:
                 axis1 = output.subscripts.index(letter)
                 axis2 = output.subscripts.index(letter, axis1 + 1)
-                if VERBOSE: print("diagonalize",self.outputs.index(output),letter,axis1,axis2)
+                log("diagonalize",self.outputs.index(output),letter,axis1,axis2)
                 # TODO: add nodes to diagonalize and set output.name to output of last node
                 output.delete(axis1)
 
@@ -136,7 +138,7 @@ class Einsummer:
             if not self.occurs(letter, ignore=[output])
         ]
         if axes:
-            if VERBOSE: print("reduceSum",self.outputs.index(output),axes)
+            log("reduceSum",self.outputs.index(output),axes)
             # TODO: add node to ReduceSum and set output.name to node's output
             output.deleteAxes(axes)
 
@@ -164,7 +166,7 @@ def einsummer_test():
     res = EinsumParam("res", EinsumSubscripts("ik"), (3,4))
     ein = Einsummer([in1, in2, in3], res, DType(np.float32))
     ein.transform()
-    if VERBOSE: print("ein:",ein)
+    log("ein:",ein)
     print("einsummer_test() end")
 
 if __name__ == "__main__":
