@@ -140,10 +140,21 @@ class Einsummer:
             # TODO: add node to ReduceSum and set output.name to node's output
             output.deleteAxes(axes)
 
+    def contract(self, output1: EinsumParam, output2: EinsumParam) -> None:
+        # TODO
+        self.outputs.remove(output2)
+
+    def finalize(self) -> None:
+        # TODO
+        ...
+
     def transform(self) -> None:
         for output in self.outputs:
             self.diagonalize(output)
             self.reduceSum(output)
+        while len(self.outputs) > 1:
+            self.contract(self.outputs[0], self.outputs[1])
+        self.finalize()
 
 def einsummer_test():
     print("einsummer_test() start")
