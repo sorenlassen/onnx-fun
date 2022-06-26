@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Dict, List, Tuple, Union, Any, TYPE_CHECKING
+from typing import Dict, List, Tuple, Union, Any
 import os
 import math
 import numpy as np
@@ -7,86 +7,6 @@ import onnx # type: ignore
 import onnxruntime # type: ignore
 import einsum # type: ignore
 
-if TYPE_CHECKING:
-    Shape = Tuple[int, ...]
-    class OnnxDim:
-        dim_value: int
-    class OnnxShape:
-        dim: List[OnnxDim]
-    class OnnxTensorType:
-        elem_type: int
-        shape: OnnxShape
-    class OnnxType:
-        tensor_type: OnnxTensorType
-    class OnnxValueInfo:
-        name: str
-        type: OnnxType
-    class OnnxSegment:
-        begin: int
-        end: int
-    class OnnxTensor:
-        dims: List[OnnxDim]
-        data_type: int
-        double_data: List[float]
-        external_data: Any
-        float_data: List[float]
-        int32_data: List[int]
-        int64_data: List[int]
-        name: str
-        raw_data: Any
-        string_data: str
-        uint64_data: List[int]
-        segment: OnnxSegment
-    class OnnxSparseTensor(OnnxTensor):
-        pass
-    class OnnxAttribute:
-        name: str
-        f: float
-        floats: List[float]
-        g: OnnxGraph
-        graphs: List[OnnxGraph]
-        i: int
-        ints: List[int]
-        ref_attr_name: str
-        s: bytes
-        strings: List[bytes]
-        sparse_tensor: OnnxSparseTensor
-        sparse_tensors: List[OnnxSparseTensor]
-        t: OnnxTensor
-        tensors: List[OnnxTensor]
-        type: onnx.TensorProto
-        type_protos: List[onnx.TensorProto]
-    class OnnxNode:
-        attribute: List[OnnxAttribute]
-        domain: str
-        doc_string: str
-        input: List[str]
-        name: str
-        op_type: str
-        output: List[str]
-    class OnnxGraph:
-        doc_string: str
-        name: str
-        input: List[OnnxValueInfo]
-        output: List[OnnxValueInfo]
-        node: List[OnnxNode]
-        value_info: List[OnnxValueInfo]
-    class OnnxOperatorId:
-        version: int
-    class OnnxModel:
-        doc_string: str
-        domain: str
-        functions: List[Any]
-        graph: OnnxGraph
-        ir_version: int
-        metadata_props: List[Any]
-        model_version: int
-        opset_import: List[OnnxOperatorId]
-        producer_name: str
-        producer_version: str
-        training_info: List[Any]
-        def SerializeToString(self) -> str:
-            ...
 
 # list/tuple helpers
 def nonneg(pos, length: int):
@@ -102,6 +22,8 @@ def omit(seq, *positions):
 
 
 # EinsumSpec helpers
+Shape = Tuple[int, ...]
+
 def einsum_is_identity_spec(spec: einsum.EinsumSpec):
     if len(spec.inputs) != 1:
         return False
@@ -142,13 +64,13 @@ def onnx_type(dtype : Union[np.dtype, type]) -> onnx.TensorProto.DataType:
     ty = np.dtype(dtype) # np.dtype() is idempotent
     return onnx.mapping.NP_TYPE_TO_TENSOR_TYPE[ty]
 
-def param(param_name, dtype, shape) -> OnnxValueInfo:
+def param(param_name, dtype, shape) -> onnx.ValueInfoProto:
     return onnx.helper.make_tensor_value_info(
         param_name,
         onnx_type(dtype),
         shape)
 
-def make_constant_node(output_name, tensor) -> OnnxNode:
+def make_constant_node(output_name, tensor) -> onnx.NodeProto:
     tensor = np.asarray(tensor)
     return onnx.helper.make_node(
         "Constant",
@@ -162,7 +84,7 @@ def make_constant_node(output_name, tensor) -> OnnxNode:
         ),
     )
 
-def make_typed_graph(graph_name, nodes, inputs, outputs, dtype) -> OnnxGraph:
+def make_typed_graph(graph_name, nodes, inputs, outputs, dtype) -> onnx.GraphProto:
     return onnx.helper.make_graph(
         name=graph_name,
         nodes=nodes,
@@ -170,7 +92,7 @@ def make_typed_graph(graph_name, nodes, inputs, outputs, dtype) -> OnnxGraph:
         outputs=[param(name, dtype, shape) for name, shape in outputs],
     )
 
-def run_model(model: OnnxModel, *inputs):
+def run_model(model: onnx.ModelProto, *inputs):
     sess = onnxruntime.InferenceSession(model.SerializeToString())
     def names(params): return map(lambda param: param.name, params)
     # model might omit an input, e.g. when result is just a constant
@@ -179,7 +101,7 @@ def run_model(model: OnnxModel, *inputs):
     output_names = list(names(model.graph.output))
     return sess.run(output_names, inputs_dict)
 
-def infer_shapes_and_run_model(model: OnnxModel, *inputs):
+def infer_shapes_and_run_model(model: onnx.ModelProto, *inputs):
     model = onnx.shape_inference.infer_shapes(model)
     onnx.checker.check_model(model)
     return run_model(model, *inputs)
@@ -191,7 +113,7 @@ class Transform:
     inputs: Dict[str, Shape] # maps input names to shapes
     oname: str
     oshape: Shape
-    nodes: List[OnnxNode]
+    nodes: List[onnx.NodeProto]
 
     def __init__(self, name, shape, dtype):
         '''The identity transform from one input to the same output.'''
@@ -202,7 +124,7 @@ class Transform:
         self.oshape = shape
         self.nodes = []
 
-    def graph(self, graph_name: str) -> OnnxGraph:
+    def graph(self, graph_name: str) -> onnx.GraphProto:
         if len(self.nodes) == 0:
             # Empty graphs don't compose with onnx.compose, so
             # we insert an Identity node for robustness.
@@ -212,7 +134,7 @@ class Transform:
         graph_outputs = [(self.oname, self.oshape)]
         return make_typed_graph(graph_name, self.nodes, graph_inputs, graph_outputs, self.dtype)
 
-    def model(self, graph_name: str) -> OnnxModel:
+    def model(self, graph_name: str) -> onnx.ModelProto:
         graph = self.graph(graph_name)
         return onnx.helper.make_model(graph)
 
@@ -371,7 +293,7 @@ class Transform:
         return self
 
 
-def einsum_direct_model(equation, ishapes, dtype) -> OnnxModel:
+def einsum_direct_model(equation, ishapes, dtype) -> onnx.ModelProto:
     spec = einsum.einsum_spec(equation, ishapes)
     oshape = spec.output.shape
     input_names = [f"x{i}" for i in range(len(ishapes))]
