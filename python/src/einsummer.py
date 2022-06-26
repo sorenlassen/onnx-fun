@@ -33,12 +33,14 @@ class EinsumHistogram:
         return self.histogram.keys()
 
     def __getitem__(self, datum: str) -> int:
-        return self.histogram[datum]
+        return self.histogram.get(datum, 0)
 
     def decrement(self, datum: str) -> None:
-        assert self.histogram[datum] >= 1
-        self.histogram[datum] -= 1
-        if self.histogram[datum] == 0:
+        c = self.histogram[datum]
+        assert c > 0
+        if c > 1:
+            self.histogram[datum] = c - 1
+        else:
             del self.histogram[datum]
 
 @dataclass
@@ -89,6 +91,12 @@ class EinsumParam:
         del self.subscripts[axis]
         self.shape = self.shape[:axis] + self.shape[axis + 1:]
 
+    def deleteAxes(self, axes: List[int]) -> None:
+        offset = 0
+        for a in sorted(axes):
+            self.delete(a - offset)
+            offset += a >= 0
+
 @dataclass
 class Einsummer:
     dtype: DType
@@ -104,6 +112,12 @@ class Einsummer:
         self.result = result
         self.nodes = []
 
+    def occurs(self, letter: str, ignore: List[EinsumParam] = []) -> bool:
+        for output in self.outputs:
+            if output not in ignore and output.subscripts.histogram[letter] > 0:
+                return True
+        return self.result.subscripts.histogram[letter] > 0
+
     def diagonalize(self, output: EinsumParam) -> None:
         assert output in self.outputs
         for letter in output.subscripts.histogram.keys():
@@ -111,17 +125,34 @@ class Einsummer:
                 axis1 = output.subscripts.index(letter)
                 axis2 = output.subscripts.index(letter, axis1 + 1)
                 if VERBOSE: print("diagonalize",self.outputs.index(output),letter,axis1,axis2)
-                # TODO: add nodes to diagonalize two axes and set output.name to the name of the last output
+                # TODO: add nodes to diagonalize and set output.name to output of last node
                 output.delete(axis1)
+
+    def reduceSum(self, output: EinsumParam) -> None:
+        assert output in self.outputs
+        axes = [
+            output.subscripts.index(letter)
+            for letter in output.subscripts.histogram.keys()
+            if not self.occurs(letter, ignore=[output])
+        ]
+        if axes:
+            if VERBOSE: print("reduceSum",self.outputs.index(output),axes)
+            # TODO: add node to ReduceSum and set output.name to node's output
+            output.deleteAxes(axes)
 
 def einsummer_test():
     print("einsummer_test() start")
     in1 = EinsumParam("in1", EinsumSubscripts("a...ij"), (2,1,2,3,3,2))
     in2 = EinsumParam("in2", EinsumSubscripts("...jkk"), (5,1,3,2,4,4))
+    in3 = EinsumParam("in3", EinsumSubscripts("xyzx...xwx"), (2,2,1,1,1,2,2))
     res = EinsumParam("res", EinsumSubscripts("ik"), (3,4))
-    ein = Einsummer([in1, in2], res, DType(np.float32))
+    ein = Einsummer([in1, in2, in3], res, DType(np.float32))
     ein.diagonalize(ein.outputs[0])
+    ein.reduceSum(ein.outputs[0])
     ein.diagonalize(ein.outputs[1])
+    ein.reduceSum(ein.outputs[1])
+    ein.diagonalize(ein.outputs[2])
+    ein.reduceSum(ein.outputs[2])
     if VERBOSE: print("ein:",ein)
     print("einsummer_test() end")
 
