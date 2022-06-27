@@ -169,6 +169,9 @@ class Einsummer:
         self.result = result
         self.nodes = []
 
+    def nextOutputName(self, prefix: str) -> str:
+        return f"{prefix}_{len(self.nodes)}"
+
     def occurs(self, letter: str, ignore: List[EinsumParam] = []) -> bool:
         for output in self.outputs:
             if output not in ignore and letter in output.subscripts:
@@ -197,10 +200,21 @@ class Einsummer:
             for letter in output.subscripts
             if not self.occurs(letter, ignore=[output])
         ]
-        if axes:
-            log("reduceSum",self.outputs.index(output),axes)
-            # TODO: add node to ReduceSum and set output.name to node's output
-            output.deleteAxes(axes)
+        if not axes:
+            return
+        log("reduceSum",self.outputs.index(output),axes)
+        axesTensor = np.array(axes, dtype=np.int64)
+        axesName = self.nextOutputName("sum_axes")
+        self.nodes.append(make_constant_node(axesName, axesTensor))
+        sumName = self.nextOutputName("sum")
+        self.nodes.append(onnx.helper.make_node(
+            "ReduceSum",
+            inputs=[output.name, axesName],
+            outputs=[sumName],
+            keepdims=0,
+        ))
+        output.name = sumName
+        output.deleteAxes(axes)
 
     def contract(self, output1: EinsumParam, output2: EinsumParam) -> None:
         # TODO
