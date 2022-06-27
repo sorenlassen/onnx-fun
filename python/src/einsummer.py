@@ -1,6 +1,6 @@
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, KeysView, List, Sequence, Tuple, Union
+from typing import Any, Dict, KeysView, List, Sequence, Tuple, TypeVar, Union
 from copy import deepcopy
 import math
 import string
@@ -10,7 +10,7 @@ import onnx # type: ignore
 import onnxruntime # type: ignore
 
 
-Shape = Tuple[int, ...]
+Shape = Sequence[int]
 DType = Union[np.dtype, type]
 
 
@@ -19,7 +19,35 @@ def log(*args):
     if VERBOSE: print(*args)
 
 
+# Shape helpers:
+
+def nonneg(axes: Sequence[int], length: int, reverse=False, unique=True) -> Sequence[int]:
+    assert all(-length <= a < length for a in axes)
+    nn = sorted(((a + length) if a < 0 else a for a in axes), reverse=reverse)
+    if unique: assert len(nn) == len(set(nn)), "duplicate axes"
+    return nn
+
+def shapeSize(shape: Shape) -> int: return math.prod(shape)
+
+def shapeExpandDims(shape: Shape, axes: Sequence[int]) -> Shape:
+    axes = nonneg(axes, len(shape) + len(axes), reverse=False)
+    assert len(axes) == len(set(axes)), "duplicate axes"
+    lst = list(shape)
+    for a in axes:
+        lst.insert(a, 1)
+    return lst
+
+X = TypeVar('X')
+def listDeleteIdxs(lst: List[X], idxs: Sequence[int]) -> List[X]:
+    idxs = nonneg(idxs, len(lst), reverse=True)
+    assert len(idxs) == len(set(idxs)), "duplicate idxs"
+    for i in idxs:
+        del lst[i]
+    return lst
+
+
 # ONNX helpers:
+
 def onnx_type(dtype : DType) -> onnx.TensorProto:
     '''Returns equivalent onnx.TensorProto basetype for a given NumPy type
     where dtype can be either a np.dtype or np.float32, np.int64, etc.'''
@@ -81,71 +109,28 @@ def infer_shapes_and_run_model(model: onnx.ModelProto, *inputs):
 
 
 EINSUM_ELLIPSIS = "..."
+EINSUM_ELLIPSIS_CHAR = "."
 EINSUM_LETTERS = string.ascii_uppercase + string.ascii_lowercase # A-Za-z
 EINSUM_LETTERS_SET = set(EINSUM_LETTERS)
 
 @dataclass
-class EinsumHistogram:
-    histogram: Dict[str, int]
-
-    def __init__(self, data: Sequence[str]):
-        self.histogram = defaultdict(int)
-        for datum in data:
-            self.histogram[datum] += 1
-
-    def keys(self) -> KeysView[str]:
-        return self.histogram.keys()
-
-    def __getitem__(self, datum: str) -> int:
-        return self.histogram.get(datum, 0)
-
-    def decrement(self, datum: str) -> None:
-        c = self.histogram[datum]
-        assert c > 0
-        if c > 1:
-            self.histogram[datum] = c - 1
-        else:
-            del self.histogram[datum]
-
-@dataclass
-class EinsumSubscripts:
-    subscriptsList: List[str]
-    ellipsisPos: int # len(subscripts) if no ellipsis
-    ellipsisEnd: int # ellipsisPos if no ellipsis
-    histogram: EinsumHistogram
-
-    def __init__(self, subscriptsString: str):
-        front, ellipsis, tail = subscriptsString.partition(EINSUM_ELLIPSIS)
-        self.subscriptsList = list(front) + ([ellipsis] if ellipsis else []) + list(tail)
-        letters = front + tail
-        assert EINSUM_LETTERS_SET.issuperset(letters)
-        self.ellipsisPos = len(front)
-        self.ellipsisEnd = len(self.subscriptsList) - len(tail)
-        assert (self.ellipsisEnd - self.ellipsisPos) == (1 if ellipsis else 0)
-        self.histogram = EinsumHistogram(letters)
-
-    def __delitem__(self, axis: int) -> None:
-        assert (0 <= axis < self.ellipsisPos) or \
-            (self.ellipsisEnd - len(self.subscriptsList) <= axis < 0)
-        letter = self.subscriptsList[axis]
-        self.histogram.decrement(letter)
-        del self.subscriptsList[axis]
-        if axis >= 0:
-            self.ellipsisPos -= 1
-            self.ellipsisEnd -= 1
-
-    def index(self, letter: str, start: int = 0) -> int:
-        i = self.subscriptsList.index(letter, start)
-        if i < self.ellipsisPos:
-            return i
-        else:
-            return i - len(self.subscriptsList)
-
-@dataclass
 class EinsumParam:
     name: str
-    subscripts: EinsumSubscripts
     shape: Shape
+    subscripts: str
+
+    def __init__(self, name: str, shape: Shape, subscripts: str):
+        self.name = name
+        self.shape = shape
+        # edit subscripts to make ellipsis dots match their shape
+        # TODO: decide if caller should do this
+        front, ellipsis, tail = subscripts.partition(EINSUM_ELLIPSIS)
+        if ellipsis:
+            ellipsisLen = len(shape) - len(front) - len(tail)
+            assert ellipsisLen >= 0
+            subscripts = front + EINSUM_ELLIPSIS_CHAR * ellipsisLen + tail
+        assert len(subscripts) == len(shape)
+        self.subscripts = subscripts
 
     def rank(self) -> int:
         return len(self.shape)
@@ -153,16 +138,15 @@ class EinsumParam:
     def size(self) -> int:
         return math.prod(self.shape)
 
-    def delete(self, axis: int) -> None:
-        assert -self.rank() <= axis < self.rank()
-        del self.subscripts[axis]
-        self.shape = self.shape[:axis] + self.shape[axis + 1:]
-
-    def deleteAxes(self, axes: List[int]) -> None:
-        offset = 0
-        for a in sorted(axes):
-            self.delete(a - offset)
-            offset += a >= 0
+    def deleteAxes(self, axes: Sequence[int]) -> None:
+        # self.shape = tuple(listDeleteIdxs(list(self.shape), axes))
+        # self.subscripts = "".join(listDeleteIdxs(list(self.subscripts), axes))
+        axes = nonneg(axes, len(self.shape), reverse=True)
+        assert len(axes) == len(set(axes)), "duplicate axes"
+        shape, subscripts = list(self.shape), list(self.subscripts)
+        for a in axes:
+            del shape[a]; del subscripts[a]
+        self.shape, self.subscripts = tuple(shape), "".join(subscripts)
 
 @dataclass
 class Einsummer:
@@ -181,25 +165,28 @@ class Einsummer:
 
     def occurs(self, letter: str, ignore: List[EinsumParam] = []) -> bool:
         for output in self.outputs:
-            if output not in ignore and output.subscripts.histogram[letter] > 0:
+            if output not in ignore and letter in output.subscripts:
                 return True
-        return self.result.subscripts.histogram[letter] > 0
+        if self.result not in ignore:
+            return letter in self.result.subscripts
+        else:
+            return False
 
     def diagonalize(self, output: EinsumParam) -> None:
         assert output in self.outputs
-        for letter in output.subscripts.histogram.keys():
-            while output.subscripts.histogram[letter] > 1:
+        for letter in output.subscripts:
+            while output.subscripts.count(letter) > 1:
                 axis1 = output.subscripts.index(letter)
                 axis2 = output.subscripts.index(letter, axis1 + 1)
                 log("diagonalize",self.outputs.index(output),letter,axis1,axis2)
                 # TODO: add nodes to diagonalize and set output.name to output of last node
-                output.delete(axis1)
+                output.deleteAxes([axis1])
 
     def reduceSum(self, output: EinsumParam) -> None:
         assert output in self.outputs
         axes = [
             output.subscripts.index(letter)
-            for letter in output.subscripts.histogram.keys()
+            for letter in output.subscripts
             if not self.occurs(letter, ignore=[output])
         ]
         if axes:
@@ -230,24 +217,24 @@ class Einsummer:
 def einsummer_test():
     print("einsummer_test() start")
 
-    in1_1 = EinsumParam("in1", EinsumSubscripts("a...ij"), (2,1,2,3,3,2))
-    in1_2 = EinsumParam("in2", EinsumSubscripts("...jkk"), (5,1,3,2,4,4))
-    in1_3 = EinsumParam("in3", EinsumSubscripts("xyzx...xwx"), (2,2,1,1,1,2,2))
-    res1 = EinsumParam("res", EinsumSubscripts("ik"), (3,4))
+    in1_1 = EinsumParam("in1", (2,1,2,3,3,2), "a...ij")
+    in1_2 = EinsumParam("in2", (5,1,3,2,4,4), "...jkk")
+    in1_3 = EinsumParam("in3", (2,2,1,1,1,2,2), "xyzx...xwx")
+    res1 = EinsumParam("res", (3,4), "ik")
     ein1 = Einsummer([in1_1, in1_2, in1_3], res1, np.float32)
     ein1.transform()
     log("ein1:",ein1)
 
     # zeros result because of zero dim in input
-    in2 = EinsumParam("in", EinsumSubscripts("ij"), (0,2))
-    res2 = EinsumParam("res", EinsumSubscripts("j"), (2,))
+    in2 = EinsumParam("in", (0,2), "ij")
+    res2 = EinsumParam("res", (2,), "j")
     ein2 = Einsummer([in2], res2, np.uint32)
     ein2.transform()
     log("ein2:",ein2)
 
     # empty result because of zero dim in result
-    in3 = EinsumParam("in", EinsumSubscripts("ij"), (0,2))
-    res3 = EinsumParam("res", EinsumSubscripts("ji"), (2,0))
+    in3 = EinsumParam("in", (0,2), "ij")
+    res3 = EinsumParam("res", (2,0), "ji")
     ein3 = Einsummer([in3], res3, float)
     ein3.transform()
     log("ein3:",ein3)
