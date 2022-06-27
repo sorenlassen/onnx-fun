@@ -1,6 +1,6 @@
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, KeysView, List, Sequence, Tuple, TypeVar, Union
+from typing import Any, Dict, KeysView, List, Sequence, Set, Tuple, TypeVar, Union
 from copy import deepcopy
 import math
 import string
@@ -138,6 +138,12 @@ class EinsumParam:
     def size(self) -> int:
         return math.prod(self.shape)
 
+    def letters(self) -> Set[str]:
+        return set(self.subscripts).difference(EINSUM_ELLIPSIS_CHAR)
+
+    def duplicates(self) -> Set[str]:
+        return {letter for letter in self.letters() if self.subscripts.count(letter) > 1}
+
     def deleteAxes(self, axes: Sequence[int]) -> None:
         # self.shape = tuple(listDeleteIdxs(list(self.shape), axes))
         # self.subscripts = "".join(listDeleteIdxs(list(self.subscripts), axes))
@@ -174,16 +180,18 @@ class Einsummer:
 
     def diagonalize(self, output: EinsumParam) -> None:
         assert output in self.outputs
-        for letter in output.subscripts:
+        for letter in output.duplicates():
             while output.subscripts.count(letter) > 1:
                 axis1 = output.subscripts.index(letter)
                 axis2 = output.subscripts.index(letter, axis1 + 1)
                 log("diagonalize",self.outputs.index(output),letter,axis1,axis2)
                 # TODO: add nodes to diagonalize and set output.name to output of last node
                 output.deleteAxes([axis1])
+        assert not output.duplicates()
 
     def reduceSum(self, output: EinsumParam) -> None:
         assert output in self.outputs
+        assert not output.duplicates(), "duplicates must have been removed"
         axes = [
             output.subscripts.index(letter)
             for letter in output.subscripts
