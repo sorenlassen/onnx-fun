@@ -166,6 +166,8 @@ class Einsummer:
     def __init__(self, inputs: List[EinsumParam], result: EinsumParam, dtype: DType):
         self.dtype = dtype
         self.inputs = inputs
+        # transform() mutates outputs, so we make a deep copy to avoud interference
+        # with the inputs, which are needed to make a graph in the end
         self.outputs = deepcopy(inputs)
         self.result = result
         self.nodes = []
