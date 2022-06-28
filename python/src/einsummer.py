@@ -1,3 +1,4 @@
+from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, KeysView, List, Sequence, Set, Tuple, TypeVar, Union
@@ -63,6 +64,7 @@ def onnx_type(dtype : DType) -> onnx.TensorProto:
         np.dtype(np.float16): onnx.TensorProto.FLOAT16,
         np.dtype(np.float32): onnx.TensorProto.FLOAT,
         np.dtype(np.float64): onnx.TensorProto.DOUBLE,
+        np.dtype(bool): onnx.TensorProto.BOOL,
     }[ty]
 
 def param(param_name: str, dtype: DType, shape: Shape) -> onnx.ValueInfoProto:
@@ -185,24 +187,58 @@ class Einsummer:
         assert output in self.outputs
         for letter in output.duplicates():
             while output.subscripts.count(letter) > 1:
-                axis1 = output.subscripts.index(letter)
-                axis2 = output.subscripts.index(letter, axis1 + 1)
-                log("diagonalize",self.outputs.index(output),letter,axis1,axis2)
-                # TODO: add nodes to diagonalize and set output.name to output of last node
-                output.deleteAxes([axis1])
+                axes = [a for a, s in enumerate(output.subscripts) if s == letter]
+                log("diagonalize",self.outputs.index(output),letter,axes)
+                self.diagonal(output, axes)
         assert not output.duplicates()
 
-    def reduceSum(self, output: EinsumParam) -> None:
+    def diagonal(self, output: EinsumParam, axes: Sequence[int]) -> None:
+        letter = output.subscripts[axes[0]]
+        dim = output.shape[axes[0]]
+        assert all(dim == output.shape[a] for a in axes)
+
+        if dim == 1:
+            self.squeeze(output, axes[1:])
+
+        size = dim ** len(axes)
+        maskTensor = np.full(size, False)
+        maskTensor[0:size:(size - 1) // (dim - 1)] = True
+        assert np.array_equal(
+            maskTensor.reshape((dim,)*len(axes)).nonzero(),
+            (np.arange(dim),) * len(axes)), \
+            "mask[0,...,0]==...==mask[dim-1,...,dim-1]==True"
+        maskShape = tuple(dim if s == letter else 1 for s in output.subscripts)
+        maskTensor = maskTensor.reshape(maskShape)
+        maskName = self.nextOutputName("diag_mask")
+        self.nodes.append(make_constant_node(maskName, maskTensor))
+
+        zeroScalar = np.zeros((), self.dtype)
+        zeroName = self.nextOutputName("diag_zero")
+        self.nodes.append(make_constant_node(zeroName, zeroScalar))
+
+        whereName = self.nextOutputName("diag_where")
+        self.nodes.append(onnx.helper.make_node(
+            "Where",
+            inputs=[maskName, output.name, zeroName],
+            outputs=[whereName],
+        ))
+
+        self.reduceSum(output, axes[1:])
+
+    def reduce(self, output: EinsumParam) -> None:
         assert output in self.outputs
-        assert not output.duplicates(), "duplicates must have been removed"
+        assert not output.duplicates(), "duplicates should have been removed in diagonalize"
         axes = [
             output.subscripts.index(letter)
             for letter in output.subscripts
             if not self.occurs(letter, ignore=[output])
         ]
+        log("reduce",self.outputs.index(output),axes)
+        self.reduceSum(output, axes)
+
+    def reduceSum(self, output: EinsumParam, axes: Sequence[int]) -> None:
         if not axes:
             return
-        log("reduceSum",self.outputs.index(output),axes)
         axesTensor = np.array(axes, dtype=np.int64)
         axesName = self.nextOutputName("sum_axes")
         self.nodes.append(make_constant_node(axesName, axesTensor))
@@ -216,51 +252,82 @@ class Einsummer:
         output.name = sumName
         output.deleteAxes(axes)
 
+    def squeeze(self, output: EinsumParam, axes: Sequence[int]) -> None:
+        if not axes:
+            return
+        axesTensor = np.array(axes, dtype=np.int64)
+        axesName = self.nextOutputName("squeeze_axes")
+        self.nodes.append(make_constant_node(axesName, axesTensor))
+        squeezeName = self.nextOutputName("squeeze")
+        self.nodes.append(onnx.helper.make_node(
+            "Squeeze",
+            inputs=[output.name, axesName],
+            outputs=[squeezeName],
+            keepdims=0,
+        ))
+        output.name = squeezeName
+        output.deleteAxes(axes)
+
     def contract(self, output1: EinsumParam, output2: EinsumParam) -> None:
         # TODO
         self.outputs.remove(output2)
 
     def finalize(self) -> None:
-        # TODO
+        assert len(self.outputs) == 1
+        [output] = self.outputs
+        assert not output.duplicates()
+        # TODO: uncomment the following assertion when preprocessing is complete
+        # assert sorted(output.subscripts) == sorted(self.result.subscripts)
+        if output.subscripts == self.result.subscripts:
+            assert output.shape == self.result.shape
+            if output.name != self.result.name:
+                self.nodes.append(onnx.helper.make_node(
+                    "Identity",
+                    inputs=[output.name],
+                    outputs=[self.result.name],
+                ))
+                output.name = self.result.name
+            return
+        # TODO: transpose
         ...
 
-    def transform(self) -> None:
+    def transform(self) -> Einsummer:
         if self.result.size() == 0 or any(ou.size() == 0 for ou in self.outputs):
             # output is empty or all zeros (from ReduceSum of zero dim)
             self.nodes.append(make_constant_node(self.result.name, np.zeros(self.result.shape)))
-            return
+            return self
         for output in self.outputs:
             self.diagonalize(output)
-            self.reduceSum(output)
+            self.reduce(output)
         while len(self.outputs) > 1:
             self.contract(self.outputs[0], self.outputs[1])
         self.finalize()
+        return self
 
 def einsummer_test():
     print("einsummer_test() start")
-
-    in1_1 = EinsumParam("in1", (2,1,2,3,3,2), "a...ij")
-    in1_2 = EinsumParam("in2", (5,1,3,2,4,4), "...jkk")
-    in1_3 = EinsumParam("in3", (2,2,1,1,1,2,2), "xyzx...xwx")
-    res1 = EinsumParam("res", (3,4), "ik")
-    ein1 = Einsummer([in1_1, in1_2, in1_3], res1, np.float32)
-    ein1.transform()
-    log("ein1:",ein1)
-
+    hline = "-" * 80
+    log(hline)
     # zeros result because of zero dim in input
-    in2 = EinsumParam("in", (0,2), "ij")
-    res2 = EinsumParam("res", (2,), "j")
-    ein2 = Einsummer([in2], res2, np.uint32)
-    ein2.transform()
-    log("ein2:",ein2)
-
+    log("zeroDimInInput:", Einsummer([
+            EinsumParam("in", (0,2), "ij"),
+        ], EinsumParam("res", (2,), "j"),
+    np.uint32).transform())
+    log(hline)
     # empty result because of zero dim in result
-    in3 = EinsumParam("in", (0,2), "ij")
-    res3 = EinsumParam("res", (2,0), "ji")
-    ein3 = Einsummer([in3], res3, float)
-    ein3.transform()
-    log("ein3:",ein3)
-
+    log("zeroDimInResult:", Einsummer([
+            EinsumParam("in", (0,2), "ij"),
+        ], EinsumParam("res", (2,0), "ji"),
+    float).transform())
+    log(hline)
+    # ellipses
+    log("ellipses:", Einsummer([
+            EinsumParam("in1", (2,1,2,3,2), "a...ij"),
+            EinsumParam("in2", (5,1,2,4,4), "...jkk"),
+            EinsumParam("in3", (2,3,4,2,1,1,2,5,2), "xyzx...xwx"),
+        ], EinsumParam("res", (3,4), "ik"),
+    np.float32).transform())
+    log(hline)
     print("einsummer_test() end")
 
 if __name__ == "__main__":
