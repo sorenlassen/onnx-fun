@@ -96,12 +96,11 @@ def make_typed_graph(graph_name, nodes, inputs, outputs, dtype) -> onnx.GraphPro
     )
 
 def run_model(model: onnx.ModelProto, *inputs):
+    graph = model.graph
+    assert len(graph.input) == len(inputs)
     sess = onnxruntime.InferenceSession(model.SerializeToString())
-    def names(params): return map(lambda param: param.name, params)
-    # model might omit an input, e.g. when result is just a constant
-    assert len(model.graph.input) <= len(inputs)
-    inputs_dict = dict(zip(names(model.graph.input), inputs))
-    output_names = list(names(model.graph.output))
+    inputs_dict = {gi.name: i for gi, i in zip(graph.input, inputs)}
+    output_names = [go.name for go in graph.output]
     return sess.run(output_names, inputs_dict)
 
 def infer_shapes_and_run_model(model: onnx.ModelProto, *inputs):
