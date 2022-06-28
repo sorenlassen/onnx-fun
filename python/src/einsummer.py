@@ -49,23 +49,11 @@ def listDeleteIdxs(lst: List[X], idxs: Sequence[int]) -> List[X]:
 
 # ONNX helpers:
 
-def onnx_type(dtype : DType) -> onnx.TensorProto:
-    '''Returns equivalent onnx.TensorProto basetype for a given NumPy type
+def onnx_type(dtype : DType) -> onnx.TensorProto.DataType:
+    '''Returns equivalent onnx.TensorProto.DataType for a given NumPy dtype
     where dtype can be either a np.dtype or np.float32, np.int64, etc.'''
     ty = np.dtype(dtype) # np.dtype() is idempotent
-    return {
-        # TODO: support smaller int types (currently unsupported because of the type
-        # constraints of ONNX ReduceSum and MatMul which we use to decompose Einsum)
-        # TODO: support BFLOAT16 (currently unsupported by NumPy)
-        np.dtype(np.int32): onnx.TensorProto.INT32,
-        np.dtype(np.uint32): onnx.TensorProto.UINT32,
-        np.dtype(np.int64): onnx.TensorProto.INT64,
-        np.dtype(np.uint64): onnx.TensorProto.UINT64,
-        np.dtype(np.float16): onnx.TensorProto.FLOAT16,
-        np.dtype(np.float32): onnx.TensorProto.FLOAT,
-        np.dtype(np.float64): onnx.TensorProto.DOUBLE,
-        np.dtype(bool): onnx.TensorProto.BOOL,
-    }[ty]
+    return onnx.mapping.NP_TYPE_TO_TENSOR_TYPE[ty]
 
 def param(param_name: str, dtype: DType, shape: Shape) -> onnx.ValueInfoProto:
     return onnx.helper.make_tensor_value_info(
