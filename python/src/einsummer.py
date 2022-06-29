@@ -177,14 +177,14 @@ class Einsummer:
     def nextOutputName(self, prefix: str) -> str:
         return f"{prefix}_{len(self.nodes)}"
 
-    def occurs(self, letter: str, ignore: List[EinsumParam] = []) -> bool:
+    def otherSubscripts(self, *ignore: EinsumParam) -> Set[str]:
+        subscripts: Set[str] = set()
         for output in self.outputs:
-            if output not in ignore and letter in output.subscripts:
-                return True
+            if output not in ignore:
+                subscripts = subscripts.union(output.subscripts)
         if self.result not in ignore:
-            return letter in self.result.subscripts
-        else:
-            return False
+            subscripts = subscripts.union(self.result.subscripts)
+        return subscripts
 
     def diagonalize(self, output: EinsumParam) -> None:
         assert output in self.outputs
@@ -231,11 +231,9 @@ class Einsummer:
     def reduce(self, output: EinsumParam) -> None:
         assert output in self.outputs
         assert not output.duplicates(), "duplicates should have been removed in diagonalize"
-        axes = [
-            output.subscripts.index(letter)
-            for letter in output.subscripts
-            if not self.occurs(letter, ignore=[output])
-        ]
+        keep = self.otherSubscripts(output)
+        reducible = set(output.subscripts) - keep
+        axes = [output.subscripts.index(letter) for letter in reducible]
         log("reduce",self.outputs.index(output),axes)
         self.reduceSum(output, axes)
 
@@ -266,10 +264,27 @@ class Einsummer:
             "Squeeze",
             inputs=[output.name, axesName],
             outputs=[squeezeName],
-            keepdims=0,
         ))
         output.name = squeezeName
         output.deleteAxes(axes)
+
+    def unsqueeze(self, output: EinsumParam, newSubscripts: str) -> None:
+        assert set(output.subscripts) <= set(newSubscripts)
+        axes = [a for a, s in enumerate(newSubscripts) if s not in output.subscripts]
+        if not axes:
+            return
+        axesTensor = np.array(axes, dtype=np.int64)
+        axesName = self.nextOutputName("unsqueeze_axes")
+        self.nodes.append(make_constant_node(axesName, axesTensor))
+        unsqueezeName = self.nextOutputName("unsqueeze")
+        self.nodes.append(onnx.helper.make_node(
+            "Unsqueeze",
+            inputs=[output.name, axesName],
+            outputs=[unsqueezeName],
+        ))
+        output.name = unsqueezeName
+        output.subscripts = newSubscripts
+        output.shape = shapeExpandDims(output.shape, axes)
 
     def rename(self, output: EinsumParam, name:str) -> None:
         if name == output.name:
@@ -301,8 +316,84 @@ class Einsummer:
         output.subscripts = strTranspose(output.subscripts, perm)
 
     def contract(self, output1: EinsumParam, output2: EinsumParam) -> None:
+        assert output1 in self.outputs
+        assert output2 in self.outputs
+        keep = self.otherSubscripts(output1, output2)
+        fst = set(output1.subscripts)
+        snd = set(output2.subscripts)
+        intersection = fst & snd
+        reducible = intersection - keep
+        if not reducible:
+            self.mul(output1, output2)
+        else:
+            self.matmul(output1, output2, reducible)
+
+    def mul(self, o1: EinsumParam, o2: EinsumParam) -> None:
+        assert o1 in self.outputs
+        assert o2 in self.outputs
+
+        s1, s2 = o1.subscripts, o2.subscripts # for convenience
+
+        # transpose o2 to put the shared subscripts in the same order as in o1
+        sharedSubscripts = "".join(s for s in s1 if s in s2)
+        shared = set(sharedSubscripts)
+        assert shared == set(s1) & set(s2)
+        s2transposedList = [' ' if s in shared else s for s in s2]
+        p, q = 0, -1
+        while p < len(sharedSubscripts):
+            q = s2transposedList.index(' ', q + 1)
+            s2transposedList[q] = sharedSubscripts[p]
+            p += 1
+        s2transposed = "".join(s2transposedList)
+        perm = transposePerm(s2, "".join(s2transposed))
+        self.transpose(o2, perm)
+        s2 = s2transposed
+
+        # merge the subscripts and shapes together
+        def broadcast(d1: int, d2: int) -> int: return d1 if d2 == 1 else d2
+        rank = len(s1) + len(s2) - len(shared)
+        subscriptsList: List[str] = []
+        shape: List[int] = []
+        p1, p2 = 0, 0
+        while p1 < len(s1) or p2 < len(s2):
+            if p1 < len(s1) and s1[p1] not in shared:
+                subscriptsList.append(s1[p1])
+                shape.append(o1.shape[p1])
+                p1 += 1
+            elif p2 < len(s2) and s2[p2] not in shared:
+                subscriptsList.append(s2[p2])
+                shape.append(o2.shape[p2])
+                p2 += 1
+            else:
+                assert s1[p1] == s2[p2]
+                subscriptsList.append(s1[p1])
+                shape.append(broadcast(o1.shape[p1], o2.shape[p2]))
+                p1 += 1
+                p2 += 1
+        subscripts = "".join(subscriptsList)
+        assert rank == len(subscripts) == len(shape)
+
+        self.unsqueeze(o1, subscripts)
+        self.unsqueeze(o2, subscripts)
+
+        mulName = self.nextOutputName("mul")
+        self.nodes.append(onnx.helper.make_node(
+            "Mul",
+            inputs=[o1.name, o2.name],
+            outputs=[mulName],
+        ))
+        o1.name = mulName
+        o1.shape = tuple(shape)
+        o1.subscripts = subscripts
+        self.outputs.remove(o2)
+
+    def matmul(self, o1: EinsumParam, o2: EinsumParam, reducible: Set[str]) -> None:
+        assert o1 in self.outputs
+        assert o2 in self.outputs
+        assert reducible
         # TODO
-        self.outputs.remove(output2)
+        assert False, "matmul is unimplemented"
+        self.outputs.remove(o2)
 
     def finalize(self) -> None:
         assert len(self.outputs) == 1
