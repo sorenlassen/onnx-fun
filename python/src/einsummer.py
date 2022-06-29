@@ -204,14 +204,14 @@ class Einsummer:
             self.squeeze(output, axes[1:])
 
         size = dim ** len(axes)
-        maskTensor = np.full(size, False)
-        maskTensor[0:size:(size - 1) // (dim - 1)] = True
+        mask = [False] * size
+        mask[0:size:(size - 1) // (dim - 1)] = [True] * dim
         assert np.array_equal(
-            maskTensor.reshape((dim,)*len(axes)).nonzero(),
+            np.reshape(mask, (dim,)*len(axes)).nonzero(),
             (np.arange(dim),) * len(axes)), \
             "mask[0,...,0]==...==mask[dim-1,...,dim-1]==True"
         maskShape = tuple(dim if s == letter else 1 for s in output.subscripts)
-        maskTensor = maskTensor.reshape(maskShape)
+        maskTensor = np.reshape(mask, maskShape)
         maskName = self.nextOutputName("diag_mask")
         self.nodes.append(make_constant_node(maskName, maskTensor))
 
