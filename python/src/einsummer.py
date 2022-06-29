@@ -124,7 +124,6 @@ class EinsumParam:
         self.name = name
         self.shape = shape
         # edit subscripts to make ellipsis dots match their shape
-        # TODO: decide if caller should do this
         front, ellipsis, tail = subscripts.partition(EINSUM_ELLIPSIS)
         if ellipsis:
             ellipsisLen = len(shape) - len(front) - len(tail)
