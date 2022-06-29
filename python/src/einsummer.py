@@ -46,6 +46,18 @@ def listDeleteIdxs(lst: List[X], idxs: Sequence[int]) -> List[X]:
         del lst[i]
     return lst
 
+Y = TypeVar('Y')
+def seqTranspose(seq: Sequence[Y], perm: Sequence[int]) -> Sequence[Y]:
+    return tuple(seq[a] for a in perm)
+
+def strTranspose(subscripts: str, perm: Sequence[int]) -> str:
+    return "".join(seqTranspose(subscripts, perm))
+
+def transposePerm(original: str, transposed: str):
+    assert sorted(original) == sorted(transposed), f"'{original}', '{transposed}'"
+    perm = tuple(original.index(x) for x in transposed)
+    assert tuple(transposed) == seqTranspose(original, perm)
+    return perm
 
 # ONNX helpers:
 
@@ -98,7 +110,7 @@ def infer_shapes_and_run_model(model: onnx.ModelProto, *inputs):
 
 
 EINSUM_ELLIPSIS = "..."
-EINSUM_ELLIPSIS_CHAR = "."
+EINSUM_ELLIPSIS_CHARS = string.digits
 EINSUM_LETTERS = string.ascii_uppercase + string.ascii_lowercase # A-Za-z
 EINSUM_LETTERS_SET = set(EINSUM_LETTERS)
 
@@ -116,8 +128,11 @@ class EinsumParam:
         front, ellipsis, tail = subscripts.partition(EINSUM_ELLIPSIS)
         if ellipsis:
             ellipsisLen = len(shape) - len(front) - len(tail)
-            assert ellipsisLen >= 0
-            subscripts = front + EINSUM_ELLIPSIS_CHAR * ellipsisLen + tail
+            assert 0 <= ellipsisLen, \
+                f"subscripts '{subscripts}' have more indices than rank of shape {shape}"
+            assert ellipsisLen <= len(EINSUM_ELLIPSIS_CHARS), \
+                f"ellipsis ran {ellipsisLen} exceeds maximum of {len(EINSUM_ELLIPSIS_CHARS)}"
+            subscripts = front + EINSUM_ELLIPSIS_CHARS[:ellipsisLen] + tail
         assert len(subscripts) == len(shape)
         self.subscripts = subscripts
 
@@ -128,7 +143,7 @@ class EinsumParam:
         return math.prod(self.shape)
 
     def letters(self) -> Set[str]:
-        return set(self.subscripts).difference(EINSUM_ELLIPSIS_CHAR)
+        return set(self.subscripts).difference(EINSUM_ELLIPSIS_CHARS)
 
     def duplicates(self) -> Set[str]:
         return {letter for letter in self.letters() if self.subscripts.count(letter) > 1}
@@ -257,6 +272,35 @@ class Einsummer:
         output.name = squeezeName
         output.deleteAxes(axes)
 
+    def rename(self, output: EinsumParam, name:str) -> None:
+        if name == output.name:
+            return
+        self.nodes.append(onnx.helper.make_node(
+            "Identity",
+            inputs=[output.name],
+            outputs=[name],
+        ))
+        output.name = name
+
+    def transpose(self, output: EinsumParam, perm: Sequence[int], name:str = None) -> None:
+        identityPerm = list(range(len(output.shape)))
+        assert sorted(perm) == identityPerm, "perm should be a permutation of output.shape"
+        if list(perm) == identityPerm:
+            if name is not None:
+                self.rename(output, name)
+            return
+        if name is None:
+            name = self.nextOutputName("transpose")
+        self.nodes.append(onnx.helper.make_node(
+            "Transpose",
+            inputs=[output.name],
+            outputs=[name],
+            perm=perm,
+        ))
+        output.name = name
+        output.shape = seqTranspose(output.shape, perm)
+        output.subscripts = strTranspose(output.subscripts, perm)
+
     def contract(self, output1: EinsumParam, output2: EinsumParam) -> None:
         # TODO
         self.outputs.remove(output2)
@@ -264,21 +308,9 @@ class Einsummer:
     def finalize(self) -> None:
         assert len(self.outputs) == 1
         [output] = self.outputs
-        assert not output.duplicates()
-        # TODO: uncomment the following assertion when preprocessing is complete
-        # assert sorted(output.subscripts) == sorted(self.result.subscripts)
-        if output.subscripts == self.result.subscripts:
-            assert output.shape == self.result.shape
-            if output.name != self.result.name:
-                self.nodes.append(onnx.helper.make_node(
-                    "Identity",
-                    inputs=[output.name],
-                    outputs=[self.result.name],
-                ))
-                output.name = self.result.name
-            return
-        # TODO: transpose
-        ...
+        perm = transposePerm(output.subscripts, self.result.subscripts)
+        self.transpose(output, perm, name=self.result.name)
+        assert output == self.result
 
     def transform(self) -> Einsummer:
         if self.result.size() == 0 or any(ou.size() == 0 for ou in self.outputs):
@@ -309,12 +341,18 @@ def einsummer_test():
         ], EinsumParam("res", (2,0), "ji"),
     float).transform())
     log(hline)
+    # transpose
+    log("transpose:", Einsummer([
+            EinsumParam("in", (2,3), "ij"),
+        ], EinsumParam("res", (3,2), "ji"),
+    float).transform())
+    log(hline)
     # ellipses
     log("ellipses:", Einsummer([
             EinsumParam("in1", (2,1,2,3,2), "a...ij"),
             EinsumParam("in2", (5,1,2,4,4), "...jkk"),
-            EinsumParam("in3", (2,3,4,2,1,1,2,5,2), "xyzx...xwx"),
-        ], EinsumParam("res", (3,4), "ik"),
+            EinsumParam("in3", (2,3,2,2,1,1,2,4,2), "xijx...xkx"),
+        ], EinsumParam("res", (1,2,3,2), "...ij"),
     np.float32).transform())
     log(hline)
     print("einsummer_test() end")
