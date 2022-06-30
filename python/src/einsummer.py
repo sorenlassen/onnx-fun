@@ -194,10 +194,9 @@ class Einsummer:
     def diagonalize(self, output: EinsumParam) -> None:
         assert output in self.outputs
         for subscript in output.duplicates():
-            while output.subscripts.count(subscript) > 1:
-                axes = [a for a, s in enumerate(output.subscripts) if s == subscript]
-                log("diagonalize",self.outputs.index(output),subscript,axes)
-                self.diagonal(output, axes)
+            axes = [a for a, s in enumerate(output.subscripts) if s == subscript]
+            log("diagonalize",self.outputs.index(output),subscript,axes)
+            self.diagonal(output, axes)
         assert not output.duplicates()
 
     def diagonal(self, output: EinsumParam, axes: Sequence[int]) -> None:
