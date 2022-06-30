@@ -315,9 +315,7 @@ class Einsummer:
         assert output1 in self.outputs
         assert output2 in self.outputs
         keep = self.otherSubscripts(output1, output2)
-        fst = set(output1.subscripts)
-        snd = set(output2.subscripts)
-        intersection = fst & snd
+        intersection = set(output1.subscripts).intersection(output2.subscripts)
         reducible = intersection - keep
         if not reducible:
             self.mul(output1, output2)
