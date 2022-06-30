@@ -328,23 +328,6 @@ class Einsummer:
         output.shape = reShape
         output.subscripts = reSubscripts
 
-    def broadcastTo(self, output: EinsumParam, broadcastShape: Shape) -> None:
-        if output.shape == broadcastShape:
-            return
-        assert len(output.shape) == len(broadcastShape)
-        assert all(d == e or d == 1 for d, e in zip(output.shape, broadcastShape))
-        shapeTensor = np.array(broadcastShape, dtype=np.int64)
-        shapeName = self.nextOutputName("expand_shape")
-        self.nodes.append(make_constant_node(shapeName, shapeTensor))
-        expandName = self.nextOutputName("expand")
-        self.nodes.append(onnx.helper.make_node(
-            "Expand",
-            inputs=[output.name, shapeName],
-            outputs=[expandName],
-        ))
-        output.name = expandName
-        output.shape = broadcastShape
-
     def transpose(self, output: EinsumParam, transposedSubscripts: str, name:str = None) -> None:
         if output.subscripts == transposedSubscripts:
             if name is not None:
@@ -419,16 +402,12 @@ class Einsummer:
         self.transpose(o1, subscripts1transposed)
         self.transpose(o2, subscripts2transposed)
 
-        # broadcast-expand reducible dims
-        sharedKeep1Shape, unshared1Shape, reducibleShape1 = shapeSplit(o1.shape,
+        sharedKeep1Shape, unshared1Shape, reducibleShape = shapeSplit(o1.shape,
             len(sharedKeep), len(subscripts1unshared), len(reducible))
         sharedKeep2Shape, reducibleShape2, unshared2Shape = shapeSplit(o2.shape,
             len(sharedKeep), len(reducible), len(subscripts2unshared))
-        reducibleShape = np.broadcast_shapes(reducibleShape1, reducibleShape2)
-        broadcastShape1 = shapeConcat(sharedKeep1Shape, unshared1Shape, reducibleShape)
-        broadcastShape2 = shapeConcat(sharedKeep2Shape, reducibleShape, unshared2Shape)
-        self.broadcastTo(o1, broadcastShape1)
-        self.broadcastTo(o2, broadcastShape2)
+        assert reducibleShape == reducibleShape2, \
+            "broadcast not needed because non-result 1-dim axes were squeezed at outset"
 
         # reshape unshared and redible dims into one dim each
         unshared1Size = shapeSize(unshared1Shape)
@@ -471,6 +450,14 @@ class Einsummer:
             self.nodes.append(make_constant_node(self.result.name, np.zeros(self.result.shape)))
             self.outputs = [self.result]
             return self
+        for output in self.outputs:
+            # Squeeze axes that don't appear in the result.
+            # This avoids broadcast of reducible axes in matmul later on.
+            # Must be run for all outputs before (diagonalize and) reduce pass
+            # because it may enable more axes to reduce.
+            nonresults = set(output.subscripts) - set(self.result.subscripts)
+            nonresultsAxes = [output.subscripts.index(s) for s in nonresults]
+            self.squeeze(output, [a for a in nonresultsAxes if output.shape[a] == 1])
         for output in self.outputs:
             self.diagonalize(output)
             self.reduce(output)
