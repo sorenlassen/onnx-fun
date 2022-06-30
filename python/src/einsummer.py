@@ -233,6 +233,7 @@ class Einsummer:
             inputs=[maskName, output.name, zeroName],
             outputs=[whereName],
         ))
+        output.name = whereName
 
         self.reduceSum(output, axes[1:])
 
