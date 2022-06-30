@@ -149,11 +149,8 @@ class EinsumParam:
     def size(self) -> int:
         return math.prod(self.shape)
 
-    def letters(self) -> Set[str]:
-        return set(self.subscripts).difference(EINSUM_ELLIPSIS_CHARS)
-
     def duplicates(self) -> Set[str]:
-        return {letter for letter in self.letters() if self.subscripts.count(letter) > 1}
+        return {s for s in self.subscripts if self.subscripts.count(s) > 1}
 
     def deleteAxes(self, axes: Sequence[int]) -> None:
         # self.shape = tuple(listDeleteIdxs(list(self.shape), axes))
@@ -196,15 +193,15 @@ class Einsummer:
 
     def diagonalize(self, output: EinsumParam) -> None:
         assert output in self.outputs
-        for letter in output.duplicates():
-            while output.subscripts.count(letter) > 1:
-                axes = [a for a, s in enumerate(output.subscripts) if s == letter]
-                log("diagonalize",self.outputs.index(output),letter,axes)
+        for subscript in output.duplicates():
+            while output.subscripts.count(subscript) > 1:
+                axes = [a for a, s in enumerate(output.subscripts) if s == subscript]
+                log("diagonalize",self.outputs.index(output),subscript,axes)
                 self.diagonal(output, axes)
         assert not output.duplicates()
 
     def diagonal(self, output: EinsumParam, axes: Sequence[int]) -> None:
-        letter = output.subscripts[axes[0]]
+        subscript = output.subscripts[axes[0]]
         dim = output.shape[axes[0]]
         assert all(dim == output.shape[a] for a in axes)
 
@@ -219,7 +216,7 @@ class Einsummer:
             np.reshape(mask, (dim,)*len(axes)).nonzero(),
             (np.arange(dim),) * len(axes)), \
             "mask[0,...,0]==...==mask[dim-1,...,dim-1]==True"
-        maskShape = tuple(dim if s == letter else 1 for s in output.subscripts)
+        maskShape = tuple(dim if s == subscript else 1 for s in output.subscripts)
         maskTensor = np.reshape(mask, maskShape)
         maskName = self.nextOutputName("diag_mask")
         self.nodes.append(make_constant_node(maskName, maskTensor))
@@ -243,7 +240,7 @@ class Einsummer:
         assert not output.duplicates(), "duplicates should have been removed in diagonalize"
         keep = self.otherSubscripts(output)
         reducible = set(output.subscripts) - keep
-        axes = [output.subscripts.index(letter) for letter in reducible]
+        axes = [output.subscripts.index(s) for s in reducible]
         log("reduce",self.outputs.index(output),axes)
         self.sum(output, axes)
 
