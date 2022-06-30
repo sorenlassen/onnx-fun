@@ -213,6 +213,7 @@ class Einsummer:
 
         size = dim ** len(axes)
         mask = [False] * size
+        assert (size - 1) % (dim - 1) == 0
         mask[0:size:(size - 1) // (dim - 1)] = [True] * dim
         assert np.array_equal(
             np.reshape(mask, (dim,)*len(axes)).nonzero(),
