@@ -263,6 +263,8 @@ class Einsummer:
         output.deleteAxes(axes)
 
     def squeeze(self, output: EinsumParam, axes: Sequence[int]) -> None:
+        # could be implemented with sum(output, axes)
+        assert all(output.shape[a] == 1 for a in axes)
         if not axes:
             return
         axesTensor = np.array(axes, dtype=np.int64)
@@ -398,6 +400,7 @@ class Einsummer:
         self.outputs.remove(o2)
 
     def matmul(self, o1: EinsumParam, o2: EinsumParam, reducible: Set[str]) -> None:
+        # could be implemented with self.mul(o1, o2); self.reduce(o1)
         assert o1 in self.outputs
         assert o2 in self.outputs
         assert reducible
