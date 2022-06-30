@@ -53,7 +53,7 @@ def seqTranspose(seq: Sequence[Y], perm: Sequence[int]) -> Sequence[Y]:
 def strTranspose(subscripts: str, perm: Sequence[int]) -> str:
     return "".join(seqTranspose(subscripts, perm))
 
-def transposePerm(original: str, transposed: str):
+def transposePerm(original: Sequence[str], transposed: Sequence[str]) -> Sequence[int]:
     assert sorted(original) == sorted(transposed), f"'{original}', '{transposed}'"
     perm = tuple(original.index(x) for x in transposed)
     assert tuple(transposed) == seqTranspose(original, perm)
@@ -332,49 +332,18 @@ class Einsummer:
         assert o1 in self.outputs
         assert o2 in self.outputs
 
-        s1, s2 = o1.subscripts, o2.subscripts # for convenience
-
-        # transpose o2 to put the shared subscripts in the same order as in o1
-        sharedSubscripts = "".join(s for s in s1 if s in s2)
+        # transpose o1 to put the shared subscripts at the end, in the order they appear in o2
+        sharedSubscripts = "".join(s for s in o2.subscripts if s in o1.subscripts)
         shared = set(sharedSubscripts)
-        assert shared == set(s1) & set(s2)
-        s2transposedList = [' ' if s in shared else s for s in s2]
-        p, q = 0, -1
-        while p < len(sharedSubscripts):
-            q = s2transposedList.index(' ', q + 1)
-            s2transposedList[q] = sharedSubscripts[p]
-            p += 1
-        s2transposed = "".join(s2transposedList)
-        perm = transposePerm(s2, "".join(s2transposed))
-        self.transpose(o2, perm)
-        s2 = s2transposed
+        assert shared == set(o1.subscripts) & set(o2.subscripts)
+        subscripts1unshared = "".join(s for s in o1.subscripts if s not in shared)
+        subscripts1transposed = subscripts1unshared + sharedSubscripts
+        perm = transposePerm(o1.subscripts, subscripts1transposed)
+        self.transpose(o1, perm)
 
-        # merge the subscripts and shapes together
-        def broadcast(d1: int, d2: int) -> int: return d1 if d2 == 1 else d2
-        rank = len(s1) + len(s2) - len(shared)
-        subscriptsList: List[str] = []
-        shape: List[int] = []
-        p1, p2 = 0, 0
-        while p1 < len(s1) or p2 < len(s2):
-            if p1 < len(s1) and s1[p1] not in shared:
-                subscriptsList.append(s1[p1])
-                shape.append(o1.shape[p1])
-                p1 += 1
-            elif p2 < len(s2) and s2[p2] not in shared:
-                subscriptsList.append(s2[p2])
-                shape.append(o2.shape[p2])
-                p2 += 1
-            else:
-                assert s1[p1] == s2[p2]
-                subscriptsList.append(s1[p1])
-                shape.append(broadcast(o1.shape[p1], o2.shape[p2]))
-                p1 += 1
-                p2 += 1
-        subscripts = "".join(subscriptsList)
-        assert rank == len(subscripts) == len(shape)
-
+        # unsqueeze to make o1 end in same subscripts as o2
+        subscripts = subscripts1unshared + o2.subscripts
         self.unsqueeze(o1, subscripts)
-        self.unsqueeze(o2, subscripts)
 
         mulName = self.nextOutputName("mul")
         self.nodes.append(onnx.helper.make_node(
@@ -383,8 +352,8 @@ class Einsummer:
             outputs=[mulName],
         ))
         o1.name = mulName
-        o1.shape = tuple(shape)
         o1.subscripts = subscripts
+        o1.shape = np.broadcast_shapes(o1.shape, o2.shape)
         self.outputs.remove(o2)
 
     def matmul(self, o1: EinsumParam, o2: EinsumParam, reducible: Set[str]) -> None:
