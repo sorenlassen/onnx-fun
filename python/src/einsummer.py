@@ -464,6 +464,7 @@ class Einsummer:
         if self.result.size() == 0 or any(ou.size() == 0 for ou in self.outputs):
             # output is empty or all zeros (from ReduceSum of zero dim)
             self.nodes.append(make_constant_node(self.result.name, np.zeros(self.result.shape)))
+            self.outputs = [self.result]
             return self
         for output in self.outputs:
             self.diagonalize(output)
@@ -474,7 +475,7 @@ class Einsummer:
         return self
 
     def graph(self, graph_name: str) -> onnx.GraphProto:
-        assert self.outputs == [self.result]
+        assert self.outputs == [self.result], f"{self.outputs},\n{self.result}\nself:{self}"
         graph_inputs = [(i.name, i.shape) for i in self.inputs]
         graph_outputs = [(self.result.name, self.result.shape)]
         return make_typed_graph(graph_name, self.nodes, graph_inputs, graph_outputs, self.dtype)
@@ -505,8 +506,8 @@ def einsum_run(equation: str, *tensors):
     [result] = infer_shapes_and_run_model(model, *tensors)
     return result
 
-def einsummer_test():
-    print("einsummer_test() start")
+def einsummer_basic_test():
+    print("einsummer_basic_test() start")
     hline = "-" * 80
     log(hline)
     # zeros result because of zero dim in input
@@ -535,7 +536,70 @@ def einsummer_test():
         ], EinsumParam("res", (5,2,3,2), "...ij"),
     np.float32).transform())
     log(hline)
-    print("einsummer_test() end")
+    print("einsummer_basic_test() end")
+
+def einsum_model_test():
+    print("einsum_model_test() start")
+
+    for equation, ishapes in [
+            ("ii->i", [(0,0)]),
+            ("ii", [(0,0)]),
+            ("ij,jk", [(0,2),(2,2)]),
+            ("ij,jk->k", [(0,2),(2,2)]),
+            ("i", [(2,)]),
+            ("...", [(2,3,4)]),
+            ("ij...k->...ijk", [(2,3,4)]),
+            # squeezes axes s,t,u:
+            ("sij->ij", [(1,2,3)]),
+            ("isj->ij", [(2,1,3)]),
+            ("ijs->ij", [(2,3,1)]),
+            ("sitju->ij", [(1,2,1,3,1)]),
+            # diagonalize axes s,t:
+            ("ss->s", [(2,2)]),
+            ("ssuu->su", [(2,2,3,3)]),
+            ("sss->s", [(2,2,2)]),
+            ("iss->is", [(3,2,2)]),
+            ("sis->is", [(2,3,2)]),
+            ("ssi->si", [(2,2,3)]),
+            # reducesum axes s,t,u:
+            ("sij->ij", [(4,2,3)]),
+            ("isj->ij", [(2,4,3)]),
+            ("ijs->ij", [(2,3,4)]),
+            ("sitju->ij", [(4,2,5,3,6)]),
+            # transpose:
+            ("ij->ji", [(2,3)]),
+            ("ijk->jik", [(2,3,4)]),
+            ("ijk->jki", [(2,3,4)]),
+            ("ijk->kji", [(2,3,4)]),
+            ("ijk->ijk", [(2,3,4)]),
+            ("ijk->ikj", [(2,3,4)]),
+            ("ijk->kij", [(2,3,4)]),
+            # unsqueeze:
+            ("ij", [(1,2)]),
+            ("ij->ji", [(1,2)]),
+            ("ij", [(1,1)]),
+            ("ij->ji", [(1,1)]),
+            ("ghijk,ghjkm->ghim", [(1,5,2,1,3),(6,1,3,1,4)]),
+            # matmul:
+            ("ij,j", [(2,3),(3,)]),
+            ("i,i", [(2,),(2,)]),
+            ("ij,ij", [(2,3),(2,3)]),
+            ("ij,ji", [(2,3),(3,2)]),
+            ("ij,jk", [(2,3),(3,4)]),
+            ("hij,hjk", [(5,2,3),(5,3,4)]),
+            ("ghijk,ghjkm", [(6,5,2,3,3),(6,5,3,3,4)]),
+            ("ghijk,ghjkm,gh", [(6,5,2,3,3),(6,5,3,3,4),(6,5)]),
+            ("ghijk,ghjkm->ghim", [(6,5,2,3,3),(6,5,3,3,4)]),
+        ]:
+        inputs = [ np.random.rand(*shape) for shape in ishapes ]
+        expected = np.einsum(equation, *inputs)
+        model = einsum_model(equation, ishapes, np.float64)
+        [actual] = infer_shapes_and_run_model(model, *inputs)
+        assert expected.shape == actual.shape
+        np.testing.assert_almost_equal(expected, actual, err_msg=f"{equation}, {ishapes}, {model}")
+
+    print("einsum_model_test() end")
 
 if __name__ == "__main__":
-   einsummer_test()
+   einsummer_basic_test()
+   einsum_model_test()
