@@ -12,15 +12,8 @@ import onnx # type: ignore
 import onnxruntime # type: ignore
 import einsum # type: ignore
 
-
 Shape = Sequence[int]
 DType = Union[np.dtype, type]
-
-
-VERBOSE = int(os.getenv("EINSUM_VERBOSE", "0")) > 0
-def log(*args):
-    if VERBOSE: print(*args)
-
 
 # Shape helpers:
 
@@ -195,7 +188,6 @@ class Einsummer:
         assert output in self.outputs
         for subscript in output.duplicates():
             axes = [a for a, s in enumerate(output.subscripts) if s == subscript]
-            log("diagonalize",self.outputs.index(output),subscript,axes)
             self.diagonal(output, axes)
         assert not output.duplicates()
 
@@ -240,7 +232,6 @@ class Einsummer:
         keep = self.otherSubscripts(output)
         reducible = set(output.subscripts) - keep
         axes = [output.subscripts.index(s) for s in reducible]
-        log("reduce",self.outputs.index(output),axes)
         self.sum(output, axes)
 
     def sum(self, output: EinsumParam, axes: Sequence[int]) -> None:
@@ -493,6 +484,11 @@ def einsum_run(equation: str, *tensors):
     model = einsum_model(equation, [t.shape for t in tensors], tensors[0].dtype)
     [result] = infer_shapes_and_run_model(model, *tensors)
     return result
+
+
+VERBOSE = int(os.getenv("EINSUM_VERBOSE", "0")) > 0
+def log(*args):
+    if VERBOSE: print(*args)
 
 def einsummer_basic_test():
     print("einsummer_basic_test() start")
