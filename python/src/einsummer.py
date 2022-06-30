@@ -375,7 +375,7 @@ class Einsummer:
 
         # transpose o1 to put the shared subscripts at the end, in the order they appear in o2
         shared = set(o1.subscripts).intersection(o2.subscripts)
-        sharedSubscripts = "".join(s for s in o2.subscripts if s in shared)
+        sharedSubscripts    = "".join(s for s in o2.subscripts if s in shared)
         subscripts1unshared = "".join(s for s in o1.subscripts if s not in shared)
         subscripts1transposed = subscripts1unshared + sharedSubscripts
         self.transpose(o1, subscripts1transposed)
@@ -405,9 +405,9 @@ class Einsummer:
         assert reducible <= shared
         sharedKeep = shared - reducible
         sharedKeepSubscripts = "".join(s for s in o1.subscripts if s in sharedKeep)
-        reducibleSubscripts = "".join(s for s in o1.subscripts if s in reducible)
-        subscripts1unshared = "".join(s for s in o1.subscripts if s not in shared)
-        subscripts2unshared = "".join(s for s in o2.subscripts if s not in shared)
+        reducibleSubscripts  = "".join(s for s in o1.subscripts if s in reducible)
+        subscripts1unshared  = "".join(s for s in o1.subscripts if s not in shared)
+        subscripts2unshared  = "".join(s for s in o2.subscripts if s not in shared)
         subscripts1transposed = sharedKeepSubscripts + subscripts1unshared + reducibleSubscripts
         subscripts2transposed = sharedKeepSubscripts + reducibleSubscripts + subscripts2unshared
         self.transpose(o1, subscripts1transposed)
@@ -449,7 +449,7 @@ class Einsummer:
         self.outputs.remove(o2)
 
         # reshape to get unshared dims back
-        shape = sharedKeepShape + tuple(unshared1Shape) + tuple(unshared2Shape)
+        shape = shapeConcat(sharedKeepShape, unshared1Shape, unshared2Shape)
         subscripts = sharedKeepSubscripts + subscripts1unshared + subscripts2unshared
         self.reshape(o1, shape, subscripts)
 
