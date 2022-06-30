@@ -1,7 +1,7 @@
 from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, Dict, KeysView, List, Sequence, Set, Tuple, TypeVar, Union
+from typing import Any, Dict, KeysView, List, Optional, Sequence, Set, Tuple, TypeVar, Union
 from copy import deepcopy
 import math
 import string
@@ -10,7 +10,6 @@ import os
 import numpy as np
 import onnx # type: ignore
 import onnxruntime # type: ignore
-import einsum # type: ignore
 
 Shape = Sequence[int]
 DType = Union[np.dtype, type]
@@ -465,21 +464,63 @@ class Einsummer:
         graph = self.graph(graph_name)
         return onnx.helper.make_model(graph)
 
-def spec_idxs_to_subscripts(idxs: einsum.Idxs) -> str:
-    ellipsis = [a for a, i in enumerate(idxs) if i < 0]
+def stripEllipsis(subscripts: str) -> str:
+    return subscripts.replace(EINSUM_ELLIPSIS, "", 1)
+
+def einsum_parse(equation: str) -> Tuple[List[str], str]:
+    equation = equation.replace(" ", "")
+    commaSeparatedArgs, arrow, output = equation.partition("->")
+    args = commaSeparatedArgs.split(",")
+    argsLetters = "".join(stripEllipsis(a) for a in args)
+    assert set(argsLetters).issubset(string.ascii_letters)
+    if arrow:
+        stripped = stripEllipsis(output)
+        assert len(stripped) == len(set(stripped)), "duplicate(s)"
+        assert set(argsLetters).issuperset(stripped)
+    else:
+        output = EINSUM_ELLIPSIS + "".join(s for s in argsLetters if argsLetters.count(s) == 1)
+    return args, output
+
+def einsum_arg_dict(subscripts: str, shape: Shape) -> Tuple[Dict[str, int], Optional[Shape]]:
+    # the following is copied from EinsumParam.__init__
+    front, ellipsis, tail = subscripts.partition(EINSUM_ELLIPSIS)
     if ellipsis:
-        return "".join(
-            spec_idxs_to_subscripts(idxs[:ellipsis[0]]) +
-            EINSUM_ELLIPSIS +
-            spec_idxs_to_subscripts(idxs[ellipsis[-1] + 1:]))
-    return "".join(einsum.einsum_letter(i) for i in idxs)
+        ellipsisLen = len(shape) - len(front) - len(tail)
+        assert 0 <= ellipsisLen, \
+            f"subscripts '{subscripts}' have more indices than rank of shape {shape}"
+        assert ellipsisLen <= len(EINSUM_ELLIPSIS_CHARS), \
+            f"ellipsis ran {ellipsisLen} exceeds maximum of {len(EINSUM_ELLIPSIS_CHARS)}"
+        ellipsisShape = shape[len(front):][:ellipsisLen]
+    else:
+        ellipsisShape = None
+    letters = front + tail
+    lettersShape = shapeConcat(shape[:len(front)], shape[len(shape) - len(tail):])
+    dct = {s: d for s, d in zip(letters, lettersShape)}
+    for s, d in zip(letters, lettersShape):
+        assert dct[s] == d, "all occurrences of subscript in arg should have same dim"
+    return dct, ellipsisShape
+
+def einsum_infer_shape(args: Sequence[str], output: str, ishapes: Sequence[Shape]) -> Shape:
+    assert len(args) == len(ishapes)
+    dcts, ellipsisShapes = zip(*(einsum_arg_dict(arg, shape) for arg, shape in zip(args, ishapes)))
+    ellipsisShapes = tuple(shape for shape in ellipsisShapes if shape != None)
+    ellipsisLen = len(ellipsisShapes[0]) if ellipsisShapes else 0
+    assert all(len(shape) == ellipsisLen for shape in ellipsisShapes)
+    ellipsisShape: Shape = np.broadcast_shapes(*ellipsisShapes)
+    front, ellipsis, tail = output.partition(EINSUM_ELLIPSIS)
+    if not ellipsis: assert not ellipsisShape, \
+            "ellipsis must be absent or empty in inputs when absent from output"
+    def dim(letter: str) -> int:
+        return np.broadcast_shapes(1, *(dct.get(letter, 1) for dct in dcts))[0]
+    def shape(subscripts: str) -> Shape:
+        return tuple(dim(s) for s in subscripts)
+    return shapeConcat(shape(front), ellipsisShape, shape(tail))
 
 def einsum_model(equation: str, ishapes: List[Shape], dtype: DType):
-    spec = einsum.einsum_spec(equation, ishapes)
-    ins = [spec_idxs_to_subscripts(i.idxs) for i in spec.inputs]
-    out = spec_idxs_to_subscripts(spec.output.idxs)
-    inputs = [EinsumParam(f"in{i}", ishapes[i], ins[i]) for i in range(len(ishapes))]
-    result = EinsumParam("res", spec.output.shape, out)
+    args, output = einsum_parse(equation)
+    shape = einsum_infer_shape(args, output, ishapes)
+    inputs = [EinsumParam(f"in{i}", ishapes[i], args[i]) for i in range(len(ishapes))]
+    result = EinsumParam("res", shape, output)
     return Einsummer(inputs, result, dtype).transform().model(f"einsum({equation})")
 
 def einsum_run(equation: str, *tensors):
