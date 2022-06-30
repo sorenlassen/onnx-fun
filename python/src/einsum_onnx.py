@@ -655,6 +655,11 @@ def einsum_decomposed_model_test():
             ("ghijk,ghjkm", [(6,5,2,3,3),(6,5,3,3,4)]),
             ("ghijk,ghjkm,gh", [(6,5,2,3,3),(6,5,3,3,4),(6,5)]),
             ("ghijk,ghjkm->ghim", [(6,5,2,3,3),(6,5,3,3,4)]),
+            # matmul with broadcast on reduction axes
+            ("a,a", [(1,),(2,)]),
+            ("ab,ab", [(1,3),(2,1)]),
+            ("...ab,...ab", [(1,1,3),(4,2,1)]),
+            ("abxy,abxz->xyz", [(1,3,4,5),(2,1,1,6)]),
         ]:
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
