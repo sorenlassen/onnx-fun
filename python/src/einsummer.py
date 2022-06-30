@@ -145,6 +145,10 @@ class EinsumParam:
     def duplicates(self) -> Set[str]:
         return {s for s in self.subscripts if self.subscripts.count(s) > 1}
 
+    def axes(self, subscriptsSubset: Set[str]) -> Sequence[int]:
+        assert set(subscriptsSubset) <= set(self.subscripts)
+        return [self.subscripts.index(s) for s in subscriptsSubset]
+
     def deleteAxes(self, axes: Sequence[int]) -> None:
         # self.shape = tuple(listDeleteIdxs(list(self.shape), axes))
         # self.subscripts = "".join(listDeleteIdxs(list(self.subscripts), axes))
@@ -231,8 +235,7 @@ class Einsummer:
         assert not output.duplicates(), "duplicates should have been removed in diagonalize"
         keep = self.otherSubscripts(output)
         reducible = set(output.subscripts) - keep
-        axes = [output.subscripts.index(s) for s in reducible]
-        self.sum(output, axes)
+        self.sum(output, output.axes(reducible))
 
     def sum(self, output: EinsumParam, axes: Sequence[int]) -> None:
         if not axes:
@@ -443,8 +446,7 @@ class Einsummer:
             # Must be run for all outputs before (diagonalize and) reduce pass
             # because it may enable more axes to reduce.
             nonresults = set(output.subscripts) - set(self.result.subscripts)
-            nonresultsAxes = [output.subscripts.index(s) for s in nonresults]
-            self.squeeze(output, [a for a in nonresultsAxes if output.shape[a] == 1])
+            self.squeeze(output, [a for a in output.axes(nonresults) if output.shape[a] == 1])
         for output in self.outputs:
             self.diagonalize(output)
             self.reduce(output)
