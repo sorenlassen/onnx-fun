@@ -10,6 +10,7 @@ import os
 import numpy as np
 import onnx # type: ignore
 import onnxruntime # type: ignore
+import einsum # type: ignore
 
 
 Shape = Sequence[int]
@@ -471,6 +472,38 @@ class Einsummer:
             self.contract(self.outputs[0], self.outputs[1])
         self.finalize()
         return self
+
+    def graph(self, graph_name: str) -> onnx.GraphProto:
+        assert self.outputs == [self.result]
+        graph_inputs = [(i.name, i.shape) for i in self.inputs]
+        graph_outputs = [(self.result.name, self.result.shape)]
+        return make_typed_graph(graph_name, self.nodes, graph_inputs, graph_outputs, self.dtype)
+
+    def model(self, graph_name: str) -> onnx.ModelProto:
+        graph = self.graph(graph_name)
+        return onnx.helper.make_model(graph)
+
+def spec_idxs_to_subscripts(idxs: einsum.Idxs) -> str:
+    ellipsis = [a for a, i in enumerate(idxs) if i < 0]
+    if ellipsis:
+        return "".join(
+            spec_idxs_to_subscripts(idxs[:ellipsis[0]]) +
+            EINSUM_ELLIPSIS +
+            spec_idxs_to_subscripts(idxs[ellipsis[-1] + 1:]))
+    return "".join(einsum.einsum_letter(i) for i in idxs)
+
+def einsum_model(equation: str, ishapes: List[Shape], dtype: DType):
+    spec = einsum.einsum_spec(equation, ishapes)
+    ins = [spec_idxs_to_subscripts(i.idxs) for i in spec.inputs]
+    out = spec_idxs_to_subscripts(spec.output.idxs)
+    inputs = [EinsumParam(f"in{i}", ishapes[i], ins[i]) for i in range(len(ishapes))]
+    result = EinsumParam("res", spec.output.shape, out)
+    return Einsummer(inputs, result, dtype).transform().model(f"einsum({equation})")
+
+def einsum_run(equation: str, *tensors):
+    model = einsum_model(equation, [t.shape for t in tensors], tensors[0].dtype)
+    [result] = infer_shapes_and_run_model(model, *tensors)
+    return result
 
 def einsummer_test():
     print("einsummer_test() start")
