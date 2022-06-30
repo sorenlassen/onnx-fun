@@ -50,9 +50,6 @@ Y = TypeVar('Y')
 def seqTranspose(seq: Sequence[Y], perm: Sequence[int]) -> Sequence[Y]:
     return tuple(seq[a] for a in perm)
 
-def strTranspose(subscripts: str, perm: Sequence[int]) -> str:
-    return "".join(seqTranspose(subscripts, perm))
-
 def transposePerm(original: Sequence[str], transposed: Sequence[str]) -> Sequence[int]:
     assert sorted(original) == sorted(transposed), f"'{original}', '{transposed}'"
     perm = tuple(original.index(x) for x in transposed)
@@ -268,9 +265,9 @@ class Einsummer:
         output.name = squeezeName
         output.deleteAxes(axes)
 
-    def unsqueeze(self, output: EinsumParam, newSubscripts: str) -> None:
-        assert set(output.subscripts) <= set(newSubscripts)
-        axes = [a for a, s in enumerate(newSubscripts) if s not in output.subscripts]
+    def unsqueeze(self, output: EinsumParam, unsqueezedSubscripts: str) -> None:
+        assert set(output.subscripts) <= set(unsqueezedSubscripts)
+        axes = [a for a, s in enumerate(unsqueezedSubscripts) if s not in output.subscripts]
         if not axes:
             return
         axesTensor = np.array(axes, dtype=np.int64)
@@ -283,7 +280,7 @@ class Einsummer:
             outputs=[unsqueezeName],
         ))
         output.name = unsqueezeName
-        output.subscripts = newSubscripts
+        output.subscripts = unsqueezedSubscripts
         output.shape = shapeExpandDims(output.shape, axes)
 
     def rename(self, output: EinsumParam, name:str) -> None:
@@ -296,13 +293,12 @@ class Einsummer:
         ))
         output.name = name
 
-    def transpose(self, output: EinsumParam, perm: Sequence[int], name:str = None) -> None:
-        identityPerm = list(range(len(output.shape)))
-        assert sorted(perm) == identityPerm, "perm should be a permutation of output.shape"
-        if list(perm) == identityPerm:
+    def transpose(self, output: EinsumParam, transposedSubscripts: str, name:str = None) -> None:
+        if output.subscripts == transposedSubscripts:
             if name is not None:
                 self.rename(output, name)
             return
+        perm = transposePerm(output.subscripts, transposedSubscripts)
         if name is None:
             name = self.nextOutputName("transpose")
         self.nodes.append(onnx.helper.make_node(
@@ -313,7 +309,7 @@ class Einsummer:
         ))
         output.name = name
         output.shape = seqTranspose(output.shape, perm)
-        output.subscripts = strTranspose(output.subscripts, perm)
+        output.subscripts = transposedSubscripts
 
     def contract(self, output1: EinsumParam, output2: EinsumParam) -> None:
         assert output1 in self.outputs
@@ -338,8 +334,7 @@ class Einsummer:
         assert shared == set(o1.subscripts) & set(o2.subscripts)
         subscripts1unshared = "".join(s for s in o1.subscripts if s not in shared)
         subscripts1transposed = subscripts1unshared + sharedSubscripts
-        perm = transposePerm(o1.subscripts, subscripts1transposed)
-        self.transpose(o1, perm)
+        self.transpose(o1, subscripts1transposed)
 
         # unsqueeze to make o1 end in same subscripts as o2
         subscripts = subscripts1unshared + o2.subscripts
@@ -367,8 +362,7 @@ class Einsummer:
     def finalize(self) -> None:
         assert len(self.outputs) == 1
         [output] = self.outputs
-        perm = transposePerm(output.subscripts, self.result.subscripts)
-        self.transpose(output, perm, name=self.result.name)
+        self.transpose(output, self.result.subscripts, name=self.result.name)
         assert output == self.result
 
     def transform(self) -> Einsummer:
