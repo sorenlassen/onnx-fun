@@ -235,7 +235,7 @@ class Einsummer:
         ))
         output.name = whereName
 
-        self.reduceSum(output, axes[1:])
+        self.sum(output, axes[1:])
 
     def reduce(self, output: EinsumParam) -> None:
         assert output in self.outputs
@@ -244,9 +244,9 @@ class Einsummer:
         reducible = set(output.subscripts) - keep
         axes = [output.subscripts.index(letter) for letter in reducible]
         log("reduce",self.outputs.index(output),axes)
-        self.reduceSum(output, axes)
+        self.sum(output, axes)
 
-    def reduceSum(self, output: EinsumParam, axes: Sequence[int]) -> None:
+    def sum(self, output: EinsumParam, axes: Sequence[int]) -> None:
         if not axes:
             return
         axesTensor = np.array(axes, dtype=np.int64)
