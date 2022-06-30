@@ -293,6 +293,43 @@ class Einsummer:
         ))
         output.name = name
 
+    def reshape(self, output: EinsumParam, reShape: Shape, reSubscripts: str) -> None:
+        assert len(reShape) == len(reSubscripts)
+        if output.shape == reShape:
+            output.subscripts = reSubscripts
+            return
+        assert shapeSize(output.shape) == shapeSize(reShape) > 0
+        shapeTensor = np.array(reShape, dtype=np.int64)
+        shapeName = self.nextOutputName("reshape_shape")
+        self.nodes.append(make_constant_node(shapeName, shapeTensor))
+        reshapeName = self.nextOutputName("reshape")
+        self.nodes.append(onnx.helper.make_node(
+            "Reshape",
+            inputs=[output.name, shapeName],
+            outputs=[reshapeName],
+            # allowzero attribute doesn't matter because our shapes never have zeros
+        ))
+        output.name = reshapeName
+        output.shape = reShape
+        output.subscripts = reSubscripts
+
+    def broadcastTo(self, output: EinsumParam, broadcastShape: Shape) -> None:
+        if output.shape == broadcastShape:
+            return
+        assert len(output.shape) == len(broadcastShape)
+        assert all(d == e or d == 1 for d, e in zip(output.shape, broadcastShape))
+        shapeTensor = np.array(broadcastShape, dtype=np.int64)
+        shapeName = self.nextOutputName("expand_shape")
+        self.nodes.append(make_constant_node(shapeName, shapeTensor))
+        expandName = self.nextOutputName("expand")
+        self.nodes.append(onnx.helper.make_node(
+            "Expand",
+            inputs=[output.name, shapeName],
+            outputs=[expandName],
+        ))
+        output.name = expandName
+        output.shape = broadcastShape
+
     def transpose(self, output: EinsumParam, transposedSubscripts: str, name:str = None) -> None:
         if output.subscripts == transposedSubscripts:
             if name is not None:
@@ -327,9 +364,8 @@ class Einsummer:
         assert o2 in self.outputs
 
         # transpose o1 to put the shared subscripts at the end, in the order they appear in o2
-        sharedSubscripts = "".join(s for s in o2.subscripts if s in o1.subscripts)
-        shared = set(sharedSubscripts)
-        assert shared == set(o1.subscripts) & set(o2.subscripts)
+        shared = set(o1.subscripts).intersection(o2.subscripts)
+        sharedSubscripts = "".join(s for s in o2.subscripts if s in shared)
         subscripts1unshared = "".join(s for s in o1.subscripts if s not in shared)
         subscripts1transposed = subscripts1unshared + sharedSubscripts
         self.transpose(o1, subscripts1transposed)
@@ -353,15 +389,69 @@ class Einsummer:
         assert o1 in self.outputs
         assert o2 in self.outputs
         assert reducible
-        # TODO
-        assert False, "matmul is unimplemented"
+
+        # transpose o1 to put the shared subscripts at the end, in the order they appear in o2
+        shared = set(o1.subscripts).intersection(o2.subscripts)
+        assert reducible <= shared
+        sharedKeep = shared - reducible
+        sharedKeepSubscripts = "".join(s for s in o1.subscripts if s in sharedKeep)
+        reducibleSubscripts = "".join(s for s in o1.subscripts if s in reducible)
+        subscripts1unshared = "".join(s for s in o1.subscripts if s not in shared)
+        subscripts2unshared = "".join(s for s in o2.subscripts if s not in shared)
+        subscripts1transposed = sharedKeepSubscripts + subscripts1unshared + reducibleSubscripts
+        subscripts2transposed = sharedKeepSubscripts + reducibleSubscripts + subscripts2unshared
+        self.transpose(o1, subscripts1transposed)
+        self.transpose(o2, subscripts2transposed)
+        sharedKeep1Shape = o1.shape[:len(sharedKeep)]
+        unshared1Shape = o1.shape[len(sharedKeep):-len(reducible)]
+        reducibleShape1 = o1.shape[-len(reducible):]
+        sharedKeep2Shape = o2.shape[:len(sharedKeep)]
+        reducibleShape2 = o2.shape[len(sharedKeep):len(sharedKeep) + len(reducible)]
+        unshared2Shape = o2.shape[len(sharedKeep) + len(reducible):]
+        assert len(reducible) == len(reducibleShape1) == len(reducibleShape2)
+
+        # broadcast-expand reducible dims
+        reducibleShape = np.broadcast_shapes(reducibleShape1, reducibleShape2)
+        broadcastShape1, broadcastShape2 = list(o1.shape), list(o2.shape)
+        broadcastShape1[-len(reducible):] = reducibleShape
+        broadcastShape2[len(sharedKeep):len(sharedKeep) + len(reducible)] = reducibleShape
+        self.broadcastTo(o1, broadcastShape1)
+        self.broadcastTo(o2, broadcastShape2)
+
+        # reshape unshared and redible dims into one dim each
+        unshared1Size = shapeSize(unshared1Shape)
+        reducibleSize = shapeSize(reducibleShape)
+        unshared2Size = shapeSize(unshared2Shape)
+        reShape1 = tuple(sharedKeep1Shape) + (unshared1Size, reducibleSize)
+        reShape2 = tuple(sharedKeep2Shape) + (reducibleSize, unshared2Size)
+        # "(", ")" are out-of-band subscripts for the reshaped unshared dims (which might
+        # be empty); 1st reducible subscript is for reshaped reducible dims (non-empty)
+        self.reshape(o1, reShape1, sharedKeepSubscripts + "(" + reducibleSubscripts[0])
+        self.reshape(o2, reShape2, sharedKeepSubscripts + reducibleSubscripts[0] + ")")
+
+        # matmul
+        matmulName = self.nextOutputName("matmul")
+        self.nodes.append(onnx.helper.make_node(
+            "MatMul",
+            inputs=[o1.name, o2.name],
+            outputs=[matmulName],
+        ))
+        o1.name = matmulName
+        o1.subscripts = sharedKeepSubscripts + "()"
+        sharedKeepShape = np.broadcast_shapes(sharedKeep1Shape, sharedKeep2Shape)
+        o1.shape = sharedKeepShape + (unshared1Size, unshared2Size)
         self.outputs.remove(o2)
+
+        # reshape to get unshared dims back
+        shape = sharedKeepShape + tuple(unshared1Shape) + tuple(unshared2Shape)
+        subscripts = sharedKeepSubscripts + subscripts1unshared + subscripts2unshared
+        self.reshape(o1, shape, subscripts)
 
     def finalize(self) -> None:
         assert len(self.outputs) == 1
         [output] = self.outputs
         self.transpose(output, self.result.subscripts, name=self.result.name)
-        assert output == self.result
+        assert output == self.result, f"{output}, {self.result}"
 
     def transform(self) -> Einsummer:
         if self.result.size() == 0 or any(ou.size() == 0 for ou in self.outputs):
@@ -403,7 +493,7 @@ def einsummer_test():
             EinsumParam("in1", (2,1,2,3,2), "a...ij"),
             EinsumParam("in2", (5,1,2,4,4), "...jkk"),
             EinsumParam("in3", (2,3,2,2,1,1,2,4,2), "xijx...xkx"),
-        ], EinsumParam("res", (1,2,3,2), "...ij"),
+        ], EinsumParam("res", (5,2,3,2), "...ij"),
     np.float32).transform())
     log(hline)
     print("einsummer_test() end")
