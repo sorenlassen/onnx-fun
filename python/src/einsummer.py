@@ -5,6 +5,7 @@ from typing import Any, Dict, KeysView, List, Sequence, Set, Tuple, TypeVar, Uni
 from copy import deepcopy
 import math
 import string
+import itertools
 import os
 import numpy as np
 import onnx # type: ignore
@@ -29,6 +30,15 @@ def nonneg(axes: Sequence[int], length: int, reverse=False, unique=True) -> Sequ
     return nn
 
 def shapeSize(shape: Shape) -> int: return math.prod(shape)
+
+def shapeSplit(shape: Shape, *splits: int) -> Tuple[Shape, ...]:
+    assert all(split >= 0 for split in splits)
+    assert sum(splits) == len(shape)
+    # TODO: come up with something simpler and faster than the following
+    return tuple(shape[sum(splits[:i]):sum(splits[:i + 1])] for i in range(len(splits)))
+
+def shapeConcat(*shape: Shape) -> Shape:
+    return tuple(itertools.chain(*shape))
 
 def shapeExpandDims(shape: Shape, axes: Sequence[int]) -> Shape:
     axes = nonneg(axes, len(shape) + len(axes), reverse=False)
@@ -402,19 +412,15 @@ class Einsummer:
         subscripts2transposed = sharedKeepSubscripts + reducibleSubscripts + subscripts2unshared
         self.transpose(o1, subscripts1transposed)
         self.transpose(o2, subscripts2transposed)
-        sharedKeep1Shape = o1.shape[:len(sharedKeep)]
-        unshared1Shape = o1.shape[len(sharedKeep):-len(reducible)]
-        reducibleShape1 = o1.shape[-len(reducible):]
-        sharedKeep2Shape = o2.shape[:len(sharedKeep)]
-        reducibleShape2 = o2.shape[len(sharedKeep):len(sharedKeep) + len(reducible)]
-        unshared2Shape = o2.shape[len(sharedKeep) + len(reducible):]
-        assert len(reducible) == len(reducibleShape1) == len(reducibleShape2)
 
         # broadcast-expand reducible dims
+        sharedKeep1Shape, unshared1Shape, reducibleShape1 = shapeSplit(o1.shape,
+            len(sharedKeep), len(subscripts1unshared), len(reducible))
+        sharedKeep2Shape, reducibleShape2, unshared2Shape = shapeSplit(o2.shape,
+            len(sharedKeep), len(reducible), len(subscripts2unshared))
         reducibleShape = np.broadcast_shapes(reducibleShape1, reducibleShape2)
-        broadcastShape1, broadcastShape2 = list(o1.shape), list(o2.shape)
-        broadcastShape1[-len(reducible):] = reducibleShape
-        broadcastShape2[len(sharedKeep):len(sharedKeep) + len(reducible)] = reducibleShape
+        broadcastShape1 = shapeConcat(sharedKeep1Shape, unshared1Shape, reducibleShape)
+        broadcastShape2 = shapeConcat(sharedKeep2Shape, reducibleShape, unshared2Shape)
         self.broadcastTo(o1, broadcastShape1)
         self.broadcastTo(o2, broadcastShape2)
 
@@ -422,8 +428,8 @@ class Einsummer:
         unshared1Size = shapeSize(unshared1Shape)
         reducibleSize = shapeSize(reducibleShape)
         unshared2Size = shapeSize(unshared2Shape)
-        reShape1 = tuple(sharedKeep1Shape) + (unshared1Size, reducibleSize)
-        reShape2 = tuple(sharedKeep2Shape) + (reducibleSize, unshared2Size)
+        reShape1 = shapeConcat(sharedKeep1Shape, (unshared1Size, reducibleSize))
+        reShape2 = shapeConcat(sharedKeep2Shape, (reducibleSize, unshared2Size))
         # "(", ")" are out-of-band subscripts for the reshaped unshared dims (which might
         # be empty); 1st reducible subscript is for reshaped reducible dims (non-empty)
         self.reshape(o1, reShape1, sharedKeepSubscripts + "(" + reducibleSubscripts[0])
