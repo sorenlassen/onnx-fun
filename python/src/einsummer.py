@@ -529,42 +529,6 @@ def einsum_run(equation: str, *tensors):
     return result
 
 
-VERBOSE = int(os.getenv("EINSUM_VERBOSE", "0")) > 0
-def log(*args):
-    if VERBOSE: print(*args)
-
-def einsummer_basic_test():
-    print("einsummer_basic_test() start")
-    hline = "-" * 80
-    log(hline)
-    # zeros result because of zero dim in input
-    log("zeroDimInInput:", Einsummer([
-            EinsumParam("in", (0,2), "ij"),
-        ], EinsumParam("res", (2,), "j"),
-    np.uint32).transform())
-    log(hline)
-    # empty result because of zero dim in result
-    log("zeroDimInResult:", Einsummer([
-            EinsumParam("in", (0,2), "ij"),
-        ], EinsumParam("res", (2,0), "ji"),
-    float).transform())
-    log(hline)
-    # transpose
-    log("transpose:", Einsummer([
-            EinsumParam("in", (2,3), "ij"),
-        ], EinsumParam("res", (3,2), "ji"),
-    float).transform())
-    log(hline)
-    # ellipses
-    log("ellipses:", Einsummer([
-            EinsumParam("in1", (2,1,2,3,2), "a...ij"),
-            EinsumParam("in2", (5,1,2,4,4), "...jkk"),
-            EinsumParam("in3", (2,3,2,2,1,1,2,4,2), "xijx...xkx"),
-        ], EinsumParam("res", (5,2,3,2), "...ij"),
-    np.float32).transform())
-    log(hline)
-    print("einsummer_basic_test() end")
-
 def einsum_model_test():
     print("einsum_model_test() start")
 
@@ -633,5 +597,4 @@ def einsum_model_test():
     print("einsum_model_test() end")
 
 if __name__ == "__main__":
-   einsummer_basic_test()
    einsum_model_test()
