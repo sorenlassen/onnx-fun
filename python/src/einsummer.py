@@ -3,9 +3,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, KeysView, List, Optional, Sequence, Set, Tuple, TypeVar, Union
 from copy import deepcopy
+from itertools import accumulate, chain
 import math
 import string
-import itertools
 import os
 import numpy as np
 import onnx # type: ignore
@@ -27,11 +27,10 @@ def shapeSize(shape: Shape) -> int: return math.prod(shape)
 def shapeSplit(shape: Shape, *splits: int) -> Tuple[Shape, ...]:
     assert all(split >= 0 for split in splits)
     assert sum(splits) == len(shape)
-    # TODO: come up with something simpler and faster than the following
-    return tuple(shape[sum(splits[:i]):sum(splits[:i + 1])] for i in range(len(splits)))
+    return tuple(shape[acc - splits[i]:acc] for i, acc in enumerate(accumulate(splits)))
 
 def shapeConcat(*shape: Shape) -> Shape:
-    return tuple(itertools.chain(*shape))
+    return tuple(chain(*shape))
 
 def shapeExpandDims(shape: Shape, axes: Sequence[int]) -> Shape:
     axes = nonneg(axes, len(shape) + len(axes), reverse=False)
