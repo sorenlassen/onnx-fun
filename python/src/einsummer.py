@@ -27,7 +27,7 @@ def shapeSize(shape: Shape) -> int: return math.prod(shape)
 def shapeSplit(shape: Shape, *splits: int) -> Tuple[Shape, ...]:
     assert all(split >= 0 for split in splits)
     assert sum(splits) == len(shape)
-    return tuple(shape[acc - splits[i]:acc] for i, acc in enumerate(accumulate(splits)))
+    return tuple(shape[acc - spl:acc] for spl, acc in zip(splits, accumulate(splits)))
 
 def shapeConcat(*shape: Shape) -> Shape:
     return tuple(chain(*shape))
