@@ -6,10 +6,10 @@ from copy import deepcopy
 from itertools import accumulate, chain
 import math
 import string
-import os
 import numpy as np
 import onnx # type: ignore
 import onnxruntime # type: ignore
+from printer import EinsumONNXModelPrinter
 
 Shape = Sequence[int]
 DType = Union[np.dtype, type]
@@ -528,6 +528,7 @@ def einsum_run(equation: str, *tensors):
 
 def einsum_model_test():
     print("einsum_model_test() start")
+    printer = EinsumONNXModelPrinter()
 
     for equation, ishapes in [
             ("ii->i", [(0,0)]),
@@ -587,6 +588,7 @@ def einsum_model_test():
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
         model = einsum_model(equation, ishapes, np.float64)
+        printer.print(equation, ishapes, model)
         [actual] = infer_shapes_and_run_model(model, *inputs)
         assert expected.shape == actual.shape
         np.testing.assert_almost_equal(expected, actual, err_msg=f"{equation}, {ishapes}, {model}")
