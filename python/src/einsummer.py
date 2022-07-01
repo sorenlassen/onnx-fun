@@ -111,8 +111,6 @@ def infer_shapes_and_run_model(model: onnx.ModelProto, *inputs):
 
 EINSUM_ELLIPSIS = "..."
 EINSUM_ELLIPSIS_CHARS = string.digits
-EINSUM_LETTERS = string.ascii_uppercase + string.ascii_lowercase # A-Za-z
-EINSUM_LETTERS_SET = set(EINSUM_LETTERS)
 
 @dataclass
 class EinsumParam:
