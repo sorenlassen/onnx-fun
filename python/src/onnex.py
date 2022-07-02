@@ -28,7 +28,7 @@ def infer_shapes_and_run_model(model, *inputs):
     onnx.checker.check_model(model)
     return run_model(model, *inputs)
 
-def onix_model(op_type, *inputs, shape=None, dtype=None, **attributes):
+def onnex_model(op_type, *inputs, shape=None, dtype=None, **attributes):
     if dtype is None:
         dtype = inputs[0].dtype if inputs else np.float64
     input_names = [f"input{i}" for i in range(len(inputs))]
@@ -45,26 +45,26 @@ def onix_model(op_type, *inputs, shape=None, dtype=None, **attributes):
         outputs=[param("output", dtype, shape)])
     return onnx.helper.make_model(graph=graph)
 
-def onix(op_type, *inputs, shape=None, dtype=None, **attributes):
-    model = onix_model(op_type, *inputs, shape=shape, dtype=dtype, **attributes)
+def onnex(op_type, *inputs, shape=None, dtype=None, **attributes):
+    model = onnex_model(op_type, *inputs, shape=shape, dtype=dtype, **attributes)
     [result] = infer_shapes_and_run_model(model, *inputs)
     return result
 
-def onix_test():
-    print("onix_test() start")
+def onnex_test():
+    print("onnex_test() start")
 
     a2 = np.array([1.1,1.2])
-    np.testing.assert_equal(a2, onix("Identity", a2))
+    np.testing.assert_equal(a2, onnex("Identity", a2))
 
     r423 = np.random.rand(4,2,3)
     r5132 = np.random.rand(5,1,3,2)
     np.testing.assert_almost_equal(r423 @ r5132, \
-        onix("MatMul", r423, r5132))
+        onnex("MatMul", r423, r5132))
 
     np.testing.assert_almost_equal(r423 @ r5132, \
-        onix("Einsum", r423, r5132, equation="abc,dace->dabe"))
+        onnex("Einsum", r423, r5132, equation="abc,dace->dabe"))
 
-    print("onix_test() end")
+    print("onnex_test() end")
 
 if __name__ == "__main__":
-   onix_test()
+   onnex_test()
