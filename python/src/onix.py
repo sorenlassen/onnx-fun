@@ -3,18 +3,10 @@ import onnx
 import onnxruntime
 
 def onnx_type(dtype):
-    '''Returns equivalent onnx.TensorProto basetype for a given numpy type
-    where dtype can be either a numpy dtype or np.float32, np.int64, etc.'''
-    if isinstance(dtype, np.dtype): dtype = dtype.type
-    return {
-        np.float32: onnx.TensorProto.FLOAT,
-        np.float64: onnx.TensorProto.DOUBLE,
-        np.int32: onnx.TensorProto.INT32,
-        np.int64: onnx.TensorProto.INT64,
-        np.longlong: onnx.TensorProto.INT64,
-        np.bool_: onnx.TensorProto.BOOL,
-        bool: onnx.TensorProto.BOOL,
-    }[dtype]
+    '''Returns equivalent onnx.TensorProto.DataType for a given NumPy dtype
+    where dtype can be either a np.dtype or np.float32, np.int64, etc.'''
+    ty = np.dtype(dtype) # np.dtype() is idempotent
+    return onnx.mapping.NP_TYPE_TO_TENSOR_TYPE[ty]
 
 def param(param_name, dtype, shape):
     return onnx.helper.make_tensor_value_info(
