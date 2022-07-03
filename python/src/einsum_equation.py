@@ -8,11 +8,11 @@ def einsum_equation_is_valid(equation: str) -> bool:
     if match is None:
         return False
     output = match.group(2)
-    if output is not None:
-        subscripts = output
-        inputs = match.group(1)
-        return set(output).difference(" .").issubset(inputs)
-    return True
+    if output is None:
+        return True
+    subscripts = output
+    inputs = match.group(1)
+    return set(output).difference(" .").issubset(inputs)
 
 def einsum_equation_infer_output(equation: str) -> str:
     counts = {s: equation.count(s) for s in set(equation).difference(",. ")}
