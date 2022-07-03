@@ -475,7 +475,8 @@ def einsum_parse(equation: str) -> Tuple[List[str], str]:
         assert len(stripped) == len(set(stripped)), "duplicate(s)"
         assert set(argsLetters).issuperset(stripped)
     else:
-        output = EINSUM_ELLIPSIS + "".join(s for s in argsLetters if argsLetters.count(s) == 1)
+        output = EINSUM_ELLIPSIS + \
+                "".join(s for s in sorted(argsLetters) if argsLetters.count(s) == 1)
     return args, output
 
 def einsum_arg_dict(subscripts: str, shape: Shape) -> Tuple[Dict[str, int], Optional[Shape]]:
@@ -538,6 +539,11 @@ def einsum_model_test():
             ("i", [(2,)]),
             ("...", [(2,3,4)]),
             ("ij...k->...ijk", [(2,3,4)]),
+            # sort inferred output alphabetically, upper before lower
+            ("ab", [(1,2)]),
+            ("a,b", [(1,),(2,)]),
+            ("a,B", [(1,),(2,)]),
+            ("B,a", [(1,),(2,)]),
             # squeezes axes s,t,u:
             ("sij->ij", [(1,2,3)]),
             ("isj->ij", [(2,1,3)]),
@@ -590,7 +596,8 @@ def einsum_model_test():
         model = einsum_model(equation, ishapes, np.float64)
         printer.print(equation, ishapes, model)
         [actual] = infer_shapes_and_run_model(model, *inputs)
-        assert expected.shape == actual.shape
+        assert expected.shape == actual.shape, \
+            f"'{equation}' {ishapes} expected:{expected.shape} actual:{actual.shape}"
         np.testing.assert_almost_equal(expected, actual, err_msg=f"{equation}, {ishapes}, {model}")
 
     print("einsum_model_test() end")
