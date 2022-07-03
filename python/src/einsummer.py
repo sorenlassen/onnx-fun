@@ -563,11 +563,16 @@ def einsum_model_test():
             ("ijk->ijk", [(2,3,4)]),
             ("ijk->ikj", [(2,3,4)]),
             ("ijk->kij", [(2,3,4)]),
-            # unsqueeze:
+            # 1-dims:
             ("ij", [(1,2)]),
             ("ij->ji", [(1,2)]),
             ("ij", [(1,1)]),
             ("ij->ji", [(1,1)]),
+            # broadcast on nonresult axes
+            ("a,a", [(1,),(2,)]),
+            ("ab,ab", [(1,3),(2,1)]),
+            ("...ab,...ab", [(1,1,3),(4,2,1)]),
+            ("abxy,abxz->xyz", [(1,3,4,5),(2,1,1,6)]),
             ("ghijk,ghjkm->ghim", [(1,5,2,1,3),(6,1,3,1,4)]),
             # matmul:
             ("ij,j", [(2,3),(3,)]),
@@ -579,11 +584,6 @@ def einsum_model_test():
             ("ghijk,ghjkm", [(6,5,2,3,3),(6,5,3,3,4)]),
             ("ghijk,ghjkm,gh", [(6,5,2,3,3),(6,5,3,3,4),(6,5)]),
             ("ghijk,ghjkm->ghim", [(6,5,2,3,3),(6,5,3,3,4)]),
-            # matmul with broadcast on reduction axes
-            ("a,a", [(1,),(2,)]),
-            ("ab,ab", [(1,3),(2,1)]),
-            ("...ab,...ab", [(1,1,3),(4,2,1)]),
-            ("abxy,abxz->xyz", [(1,3,4,5),(2,1,1,6)]),
         ]:
         inputs = [ np.random.rand(*shape) for shape in ishapes ]
         expected = np.einsum(equation, *inputs)
