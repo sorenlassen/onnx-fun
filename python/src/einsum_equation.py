@@ -16,7 +16,7 @@ def einsum_equation_is_valid(equation: str) -> bool:
 
 def einsum_equation_infer_output(equation: str) -> str:
     counts = {s: equation.count(s) for s in set(equation).difference(",. ")}
-    output = "..." + "".join(s for s in sorted(counts.keys()) if counts[s] == 1)
+    output = "..." + "".join(s for s in sorted(counts) if counts[s] == 1)
     return equation + "->" + output
 
 def einsum_equation_test():
