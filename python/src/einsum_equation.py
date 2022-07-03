@@ -6,13 +6,19 @@ EINSUM_EQUATION_PATTERN = re.compile(rf"(^{P}(?:,{P})*)(?:- *>({P}))?$", re.A | 
 def einsum_equation_is_valid(equation: str) -> bool:
     match = EINSUM_EQUATION_PATTERN.match(equation)
     if match is None:
-        return False
+        return False # doesn't match regular expression
     output = match.group(2)
     if output is None:
         return True
     subscripts = output
     inputs = match.group(1)
-    return set(output).difference(" .").issubset(inputs)
+    stripped = output.replace(" ", "").replace(".", "")
+    strippedSet = set(stripped)
+    if len(stripped) > len(strippedSet):
+        return False # repeated subscripts in output
+    if not strippedSet.issubset(inputs):
+        return False # output contains subscript not in inputs
+    return True
 
 def einsum_equation_infer_output(equation: str) -> str:
     counts = {s: equation.count(s) for s in set(equation).difference(",. ")}
@@ -29,6 +35,7 @@ def einsum_equation_test():
 
     for equation in [
         "ii->ij",
+        "ii->ii",
     ]:
         assert not einsum_equation_is_valid(equation), f"'{equation}'"
 
