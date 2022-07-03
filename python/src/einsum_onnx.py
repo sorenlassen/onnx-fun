@@ -582,6 +582,12 @@ def einsum_decomposed_model_test():
             ("i", [(2,)]),
             ("...", [(2,3,4)]),
             ("ij...k->...ijk", [(2,3,4)]),
+            # TOOO: test inferred output subscripts are sorted alphabetically, upper before lower,
+            # once bug fix lands in einsum package
+            #("ab", [(1,2)]),
+            #("a,b", [(1,),(2,)]),
+            #("a,B", [(1,),(2,)]),
+            #("B,a", [(1,),(2,)]),
             # squeezes axes s,t,u:
             ("sij->ij", [(1,2,3)]),
             ("isj->ij", [(2,1,3)]),
