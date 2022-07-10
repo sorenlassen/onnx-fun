@@ -226,6 +226,11 @@ class Einsummer:
     def sum(self, output: EinsumParam, axes: Sequence[int]) -> None:
         if not axes:
             return
+        if all(output.shape[a] == 1 for a in axes):
+            # Squeeze is better than ReduceSum because it supports all types
+            self.squeeze(output, axes)
+            return
+        # TODO: for types unsupported by ReduceSum instead Split and Add a bunch of times
         axesTensor = np.array(axes, dtype=np.int64)
         axesName = self.nextOutputName("sum_axes")
         self.nodes.append(make_constant_node(axesName, axesTensor))
@@ -240,7 +245,7 @@ class Einsummer:
         output.deleteAxes(axes)
 
     def squeeze(self, output: EinsumParam, axes: Sequence[int]) -> None:
-        # could be implemented with sum(output, axes)
+        # FWIW, could be implemented with self.sum(output, axes)
         assert all(output.shape[a] == 1 for a in axes)
         if not axes:
             return
@@ -360,7 +365,7 @@ class Einsummer:
         self.outputs.remove(o2)
 
     def matmul(self, o1: EinsumParam, o2: EinsumParam, reducible: Set[str]) -> None:
-        # could be implemented with self.mul(o1, o2); self.reduce(o1)
+        # TODO: for types unsupported by MatMul instead do: self.mul(o1, o2); self.reduce(o1)
         assert o1 in self.outputs
         assert o2 in self.outputs
         assert reducible
