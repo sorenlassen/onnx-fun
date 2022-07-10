@@ -40,14 +40,6 @@ def shapeExpandDims(shape: Shape, axes: Sequence[int]) -> Shape:
         lst.insert(a, 1)
     return lst
 
-X = TypeVar('X')
-def listDeleteIdxs(lst: List[X], idxs: Sequence[int]) -> List[X]:
-    idxs = nonneg(idxs, len(lst), reverse=True)
-    assert len(idxs) == len(set(idxs)), "duplicate idxs"
-    for i in idxs:
-        del lst[i]
-    return lst
-
 Y = TypeVar('Y')
 def seqTranspose(seq: Sequence[Y], perm: Sequence[int]) -> Sequence[Y]:
     return tuple(seq[a] for a in perm)
@@ -146,8 +138,6 @@ class EinsumParam:
         return [self.subscripts.index(s) for s in subscriptsSubset]
 
     def deleteAxes(self, axes: Sequence[int]) -> None:
-        # self.shape = tuple(listDeleteIdxs(list(self.shape), axes))
-        # self.subscripts = "".join(listDeleteIdxs(list(self.subscripts), axes))
         axes = nonneg(axes, len(self.shape), reverse=True)
         assert len(axes) == len(set(axes)), "duplicate axes"
         shape, subscripts = list(self.shape), list(self.subscripts)
@@ -166,7 +156,7 @@ class Einsummer:
     def __init__(self, inputs: List[EinsumParam], result: EinsumParam, dtype: DType):
         self.dtype = dtype
         self.inputs = inputs
-        # transform() mutates outputs, so we make a deep copy to avoud interference
+        # transform() mutates outputs, so we make a deep copy to avoid interference
         # with the inputs, which are needed to make a graph in the end
         self.outputs = deepcopy(inputs)
         self.result = result
