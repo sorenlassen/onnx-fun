@@ -188,6 +188,7 @@ class Einsummer:
 
         if dim == 1:
             self.squeeze(output, axes[1:])
+            return
 
         size = dim ** len(axes)
         mask = [False] * size
