@@ -371,7 +371,12 @@ class Einsummer:
         assert o2 in self.outputs
         assert reducible
 
-        # transpose o1 to put the shared subscripts at the end, in the order they appear in o2
+        # transpose o1, o2 to put their subscripts in the order
+        #
+        #   o1: sharedKeepSubscripts + subscripts1unshared + reducibleSubscripts
+        #   o2: sharedKeepSubscripts + reducibleSubscripts + subscripts2unshared
+        #
+        # with sharedKeepSubscripts, reducibleSubscripts in the order they appear in o1
         shared = set(o1.subscripts).intersection(o2.subscripts)
         assert reducible <= shared
         sharedKeep = shared - reducible
