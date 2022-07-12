@@ -389,6 +389,7 @@ class Einsummer:
         self.transpose(o1, subscripts1transposed)
         self.transpose(o2, subscripts2transposed)
 
+        # read off the shapes corresponding to the transposed subscripts
         sharedKeep1Shape, unshared1Shape, reducibleShape = shapeSplit(o1.shape,
             len(sharedKeep), len(subscripts1unshared), len(reducible))
         sharedKeep2Shape, reducibleShape2, unshared2Shape = shapeSplit(o2.shape,
@@ -396,7 +397,7 @@ class Einsummer:
         assert reducibleShape == reducibleShape2, \
             "broadcast not needed because non-result 1-dim axes were squeezed at outset"
 
-        # reshape unshared and redible dims into one dim each
+        # reshape unshared and reducible dims into one dim each
         unshared1Size = shapeSize(unshared1Shape)
         reducibleSize = shapeSize(reducibleShape)
         unshared2Size = shapeSize(unshared2Shape)
