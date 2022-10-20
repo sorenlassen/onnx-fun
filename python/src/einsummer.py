@@ -453,16 +453,6 @@ class Einsummer:
         self.finalize()
         return self
 
-    def graph(self, graph_name: str) -> onnx.GraphProto:
-        assert self.outputs == [self.result], f"{self.outputs},\n{self.result}\nself:{self}"
-        graph_inputs = [(i.name, i.shape) for i in self.inputs]
-        graph_outputs = [(self.result.name, self.result.shape)]
-        return make_typed_graph(graph_name, self.nodes, graph_inputs, graph_outputs, self.dtype)
-
-    def model(self, graph_name: str) -> onnx.ModelProto:
-        graph = self.graph(graph_name)
-        return onnx.helper.make_model(graph)
-
 def stripEllipsis(subscripts: str) -> str:
     return subscripts.replace(EINSUM_ELLIPSIS, "", 1)
 
@@ -516,12 +506,25 @@ def einsum_infer_shape(args: Sequence[str], output: str, ishapes: Sequence[Shape
         return tuple(dim(s) for s in subscripts)
     return shapeConcat(shape(front), ellipsisShape, shape(tail))
 
-def einsum_model(equation: str, ishapes: List[Shape], dtype: DType):
+def einsum_decompose(equation: str, result_name: str, inputs: Dict[str, Shape], dtype: DType):
     args, output = einsum_parse(equation)
-    shape = einsum_infer_shape(args, output, ishapes)
-    inputs = [EinsumParam(f"in{i}", ishapes[i], args[i]) for i in range(len(ishapes))]
-    result = EinsumParam("res", shape, output)
-    return Einsummer(inputs, result, dtype).transform().model(f"einsum({equation})")
+    assert len(args) == len(inputs)
+    result_shape = einsum_infer_shape(args, output, list(inputs.values()))
+    einsummer_inputs = [EinsumParam(name, shape, arg) for arg, (name, shape) in zip(args, inputs.items())]
+    einsummer_result = EinsumParam(result_name, result_shape, output)
+    einsummer = Einsummer(einsummer_inputs, einsummer_result, dtype).transform()
+    assert inputs == {i.name: i.shape for i in einsummer.inputs}
+    assert result_name == einsummer.result.name
+    assert result_shape == einsummer.result.shape
+    return einsummer.nodes, result_shape
+
+def einsum_model(equation: str, ishapes: List[Shape], dtype: DType):
+    inputs = {f"in{i}": shape for i, shape in enumerate(ishapes)}
+    result_name = "res"
+    nodes, result_shape = einsum_decompose(equation, result_name, inputs, dtype)
+    graph_outputs = [(result_name, result_shape)]
+    graph = make_typed_graph(f"einsum({equation})", nodes, list(inputs.items()), graph_outputs, dtype)
+    return onnx.helper.make_model(graph)
 
 def einsum_run(equation: str, *tensors):
     model = einsum_model(equation, [t.shape for t in tensors], tensors[0].dtype)
