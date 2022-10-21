@@ -537,7 +537,7 @@ def variable_lookup(graph, vname):
     # Check if the vname is an initializer
     for init in graph.initializer:
         if init.name == vname:
-            return list(init.dims), init.data_type
+            return tuple(init.dims), init.data_type
     value_infos = list(graph.input) + list(graph.value_info)
     entries = [e for e in value_infos if e.name == vname]
     if len(entries) == 0:
