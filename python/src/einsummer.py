@@ -4,12 +4,16 @@ from dataclasses import dataclass
 from typing import Any, Dict, KeysView, List, Optional, Sequence, Set, Tuple, TypeVar, Union
 from copy import deepcopy
 from itertools import accumulate, chain
+from os import getenv
+import re
 import math
 import string
 import numpy as np
 import onnx # type: ignore
 import onnxruntime # type: ignore
 from printer import EinsumONNXModelPrinter
+
+VERBOSE = not not re.fullmatch('[1-9][0-9]*|y(es)?', getenv("EINSUM_VERBOSE") or "", re.I)
 
 Shape = Sequence[int]
 DType = Union[np.dtype, type]
@@ -543,7 +547,7 @@ def variable_lookup(graph, vname):
     if len(entries) == 0:
         return None
     if len(entries) > 1:
-        print(f"WARNING: variable '{vname}' appears {len(entries)} times")
+        if VERBOSE: print(f"WARNING: variable '{vname}' appears {len(entries)} times")
         for i, entry in enumerate(entries):
             print(i + 1, entry)
     e = entries[0]
@@ -561,10 +565,10 @@ def is_static_shape(shape):
 def einsum_node_input_info(graph, einsum_node):
     infos = [variable_lookup(graph, i) for i in einsum_node.input]
     if None in infos:
-        print("WARNING: None in infos:", infos)
+        if VERBOSE: print("WARNING: None in infos", einsum_node, infos)
         return None
     if not all(is_static_shape(shape) for shape, _ in infos):
-        print("WARNING: non static shape", infos)
+        if VERBOSE: print("WARNING: non static shape", einsum_node, infos)
         return None
     _, dtype = infos[0]
     inputs = {einsum_node.input[i]: shape for i, (shape, _) in enumerate(infos)}
@@ -577,7 +581,7 @@ def find_einsum_node(graph):
             if input_info:
                 return index, node, input_info
             else:
-                print("WARNING: skipped einsum node:", node)
+                if VERBOSE: print("WARNING: skipped einsum node:", node)
     return None
 
 def einsum_equation(einsum_node):
