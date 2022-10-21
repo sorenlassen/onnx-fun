@@ -111,7 +111,7 @@ class EinsumParam:
 
     def __init__(self, name: str, shape: Shape, subscripts: str):
         self.name = name
-        self.shape = shape
+        self.shape = tuple(shape)
         # edit subscripts to make ellipsis dots match their shape
         front, ellipsis, tail = subscripts.partition(EINSUM_ELLIPSIS)
         if ellipsis:
@@ -152,8 +152,9 @@ class Einsummer:
     outputs: List[EinsumParam]
     result: EinsumParam # result.name is ignored
     nodes: List[onnx.NodeProto]
+    nameSuffix: str
 
-    def __init__(self, inputs: List[EinsumParam], result: EinsumParam, dtype: DType):
+    def __init__(self, inputs: List[EinsumParam], result: EinsumParam, dtype: DType, nameSuffix: str = ""):
         self.dtype = dtype
         self.inputs = inputs
         # transform() mutates outputs, so we make a deep copy to avoid interference
@@ -161,9 +162,10 @@ class Einsummer:
         self.outputs = deepcopy(inputs)
         self.result = result
         self.nodes = []
+        self.nameSuffix = nameSuffix
 
     def nextOutputName(self, prefix: str) -> str:
-        return f"{prefix}_{len(self.nodes)}"
+        return f"{prefix}_{len(self.nodes)}{self.nameSuffix}"
 
     def otherSubscripts(self, *ignore: EinsumParam) -> Set[str]:
         subscripts: Set[str] = set()
@@ -506,13 +508,13 @@ def einsum_infer_shape(args: Sequence[str], output: str, ishapes: Sequence[Shape
         return tuple(dim(s) for s in subscripts)
     return shapeConcat(shape(front), ellipsisShape, shape(tail))
 
-def einsum_decompose(equation: str, result_name: str, inputs: Dict[str, Shape], dtype: DType):
+def einsum_decompose(equation: str, result_name: str, inputs: Dict[str, Shape], dtype: DType, nameSuffix: str = ""):
     args, output = einsum_parse(equation)
     assert len(args) == len(inputs)
     result_shape = einsum_infer_shape(args, output, list(inputs.values()))
     einsummer_inputs = [EinsumParam(name, shape, arg) for arg, (name, shape) in zip(args, inputs.items())]
     einsummer_result = EinsumParam(result_name, result_shape, output)
-    einsummer = Einsummer(einsummer_inputs, einsummer_result, dtype).transform()
+    einsummer = Einsummer(einsummer_inputs, einsummer_result, dtype, nameSuffix).transform()
     assert inputs == {i.name: i.shape for i in einsummer.inputs}
     assert result_name == einsummer.result.name
     assert result_shape == einsummer.result.shape
@@ -536,23 +538,33 @@ def variable_lookup(graph, vname):
     for init in graph.initializer:
         if init.name == vname:
             return list(init.dims), init.data_type
-    entries = [e for e in graph.value_info if e.name == vname]
-    if len(entries) != 1:
+    value_infos = list(graph.input) + list(graph.value_info)
+    entries = [e for e in value_infos if e.name == vname]
+    if len(entries) == 0:
         return None
-    [e] = entries
+    if len(entries) > 1:
+        print(f"WARNING: variable '{vname}' appears {len(entries)} times")
+        for i, entry in enumerate(entries):
+            print(i + 1, entry)
+    e = entries[0]
+    if not e.type.tensor_type.HasField('shape'):
+        shape = None
+    else:
+        dims = e.type.tensor_type.shape.dim
+        shape = tuple(d.dim_value if not d.dim_param else -1 for d in dims)
     dtype = e.type.tensor_type.elem_type
-    dims = e.type.tensor_type.shape.dim
-    shape = [d.dim_value if not d.dim_param else -1 for d in dims]
     return shape, dtype
 
 def is_static_shape(shape):
-    return all(d >= 0 for d in shape)
+    return shape is not None and all(d >= 0 for d in shape)
 
 def einsum_node_input_info(graph, einsum_node):
     infos = [variable_lookup(graph, i) for i in einsum_node.input]
     if None in infos:
+        print("WARNING: None in infos:", infos)
         return None
     if not all(is_static_shape(shape) for shape, _ in infos):
+        print("WARNING: non static shape", infos)
         return None
     _, dtype = infos[0]
     inputs = {einsum_node.input[i]: shape for i, (shape, _) in enumerate(infos)}
@@ -564,37 +576,36 @@ def find_einsum_node(graph):
             input_info = einsum_node_input_info(graph, node)
             if input_info:
                 return index, node, input_info
+            else:
+                print("WARNING: skipped einsum node:", node)
     return None
 
-def einum_equation(einsum_node):
+def einsum_equation(einsum_node):
     for a in einsum_node.attribute:
         if a.name == "equation":
             return a.s.decode("utf8")
     assert False
 
-def einsum_decompose_model(onnx_model):
-    shaped_model = onnx.shape_inference.infer_shapes(onnx_model)
-
-    # Grab the graph after Shape inference
-    graph = shaped_model.graph
-
-    # Get the Einsum node
-    einsum_node_and_info = find_einsum_node(graph)
-
-    while einsum_node_and_info:
-        index, einsum_node, (inputs, dtype) = einsum_node_and_info
-        equation = einsum_equation(einsum_node)
-        [result_name] = node.output
-        replacement_nodes, result_shape = einsum_decompose(equation, result_name, inputs, dtype)
-        nodes = list(graph.node)[:index] + replacement_nodes + list(graph.node)[index + 1:]
-        new_graph = onnx.helper.make_graph(nodes, graph.name, graph.input, graph.output, graph.initializer)
-        new_model = onnx.helper.make_model(new_graph, producer_name=onnx_model.producer_name, ir_version=onnx_model.ir_version)
+def einsum_decompose_model(new_model):
+    while True:
         onnx.checker.check_model(new_model)
         shaped_model = onnx.shape_inference.infer_shapes(new_model)
         onnx.checker.check_model(shaped_model)
         graph = shaped_model.graph
-        einsum_node_and_info =  find_einsum_node(graph)
-
+        einsum_node_and_info = find_einsum_node(graph)
+        if einsum_node_and_info is None:
+            break
+        index, einsum_node, (inputs, dtype) = einsum_node_and_info
+        equation = einsum_equation(einsum_node)
+        print(f"INFO: replacing einsum node name:'{einsum_node.name}', equation:'{equation}'")
+        [result_name] = einsum_node.output
+        replacement_nodes, result_shape = \
+            einsum_decompose(equation, result_name, inputs, dtype, f"_{einsum_node.name}")
+        nodes = list(graph.node)[:index] + replacement_nodes + list(graph.node)[index + 1:]
+        new_graph = onnx.helper.make_graph(nodes, \
+                graph.name, graph.input, graph.output, graph.initializer)
+        new_model = onnx.helper.make_model(new_graph, \
+                producer_name=new_model.producer_name, ir_version=new_model.ir_version)
     return shaped_model
 
 
