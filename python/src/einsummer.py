@@ -531,6 +531,72 @@ def einsum_run(equation: str, *tensors):
     [result] = infer_shapes_and_run_model(model, *tensors)
     return result
 
+def variable_lookup(graph, vname):
+    # Check if the vname is an initializer
+    for init in graph.initializer:
+        if init.name == vname:
+            return list(init.dims), init.data_type
+    entries = [e for e in graph.value_info if e.name == vname]
+    if len(entries) != 1:
+        return None
+    [e] = entries
+    dtype = e.type.tensor_type.elem_type
+    dims = e.type.tensor_type.shape.dim
+    shape = [d.dim_value if not d.dim_param else -1 for d in dims]
+    return shape, dtype
+
+def is_static_shape(shape):
+    return all(d >= 0 for d in shape)
+
+def einsum_node_input_info(graph, einsum_node):
+    infos = [variable_lookup(graph, i) for i in einsum_node.input]
+    if None in infos:
+        return None
+    if not all(is_static_shape(shape) for shape, _ in infos):
+        return None
+    _, dtype = infos[0]
+    inputs = {einsum_node.input[i]: shape for i, (shape, _) in enumerate(infos)}
+    return inputs, dtype
+
+def find_einsum_node(graph):
+    for index, node in enumerate(graph.node):
+        if node.op_type == "Einsum":
+            input_info = einsum_node_input_info(graph, node)
+            if input_info:
+                return index, node, input_info
+    return None
+
+def einum_equation(einsum_node):
+    for a in einsum_node.attribute:
+        if a.name == "equation":
+            return a.s.decode("utf8")
+    assert False
+
+def einsum_decompose_model(onnx_model):
+    shaped_model = onnx.shape_inference.infer_shapes(onnx_model)
+
+    # Grab the graph after Shape inference
+    graph = shaped_model.graph
+
+    # Get the Einsum node
+    einsum_node_and_info = find_einsum_node(graph)
+
+    while einsum_node_and_info:
+        index, einsum_node, (inputs, dtype) = einsum_node_and_info
+        equation = einsum_equation(einsum_node)
+        [result_name] = node.output
+        replacement_nodes, result_shape = einsum_decompose(equation, result_name, inputs, dtype)
+        nodes = list(graph.node)[:index] + replacement_nodes + list(graph.node)[index + 1:]
+        new_graph = onnx.helper.make_graph(nodes, graph.name, graph.input, graph.output, graph.initializer)
+        new_model = onnx.helper.make_model(new_graph, producer_name=onnx_model.producer_name, ir_version=onnx_model.ir_version)
+        onnx.checker.check_model(new_model)
+        shaped_model = onnx.shape_inference.infer_shapes(new_model)
+        onnx.checker.check_model(shaped_model)
+        graph = shaped_model.graph
+        einsum_node_and_info =  find_einsum_node(graph)
+
+    return shaped_model
+
 
 def einsum_model_test():
     print("einsum_model_test() start")
